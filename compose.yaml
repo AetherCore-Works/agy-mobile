@@ -14,3 +14,10 @@ services:
       - WOL_MAC=${WOL_MAC:-00:00:00:00:00:00}
       - SSH_KEY=${SSH_KEY:-/root/.ssh/id_ed25519}
       - PORT=${PORT:-8088}
+
+  agy-ttyd:
+    image: tsl0922/ttyd:latest
+    container_name: agy-ttyd
+    restart: unless-stopped
+    network_mode: host
+    command: ["ttyd", "-p", "7681", "-W", "-t", "fontSize=14", "ssh", "-o", "StrictHostKeyChecking=accept-new", "user@192.0.2.10"]
