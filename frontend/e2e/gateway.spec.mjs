@@ -38,6 +38,12 @@ async function run() {
     await iosPage.goto(BASE_URL, { waitUntil: 'networkidle' });
     await assertNoHorizontalOverflow(iosPage, 'iOS initial');
 
+    // Verify iOS PWA apple-touch-icon points to PNG (iOS Safari ignores SVG) and loads 200
+    const appleIconHref = await iosPage.locator('link[rel="apple-touch-icon"]').getAttribute('href');
+    assert.ok(appleIconHref && appleIconHref.endsWith('.png'), `apple-touch-icon must be PNG, got ${appleIconHref}`);
+    const iconRes = await iosPage.request.get(`${BASE_URL}${appleIconHref}`);
+    assert.equal(iconRes.status(), 200, `apple-touch-icon ${appleIconHref} returned ${iconRes.status()}`);
+
     // Verify textarea font-size >= 16px on mobile to prevent iOS Safari auto-zoom
     const taFontSize = await iosPage.locator('textarea').first().evaluate((el) => {
       return parseFloat(getComputedStyle(el).fontSize);
