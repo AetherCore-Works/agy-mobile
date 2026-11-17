@@ -374,3 +374,93 @@ func TestWhisperTranscribeMod(t *testing.T) {
 		t.Fatalf("unexpected transcribe payload: %+v", payload)
 	}
 }
+
+func TestConversationMetaSortingFilteringAndSnapshots(t *testing.T) {
+	mux, store, _ := newTestServer(t)
+	if err := store.EnsureLocalConversation("local-a", "Primeira", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := store.EnsureLocalConversation("local-b", "Segunda", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// Pin local-a, rename it, and attach a project tag
+	patchReq, _ := http.NewRequest(
+		http.MethodPatch,
+		ts.URL+"/api/conversations/local-a/meta",
+		strings.NewReader(`{"pinned":true,"custom_title":"Sessão Fixada","tag":"ProjetoX","tag_color":"emerald"}`),
+	)
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(patchReq)
+	if err != nil || patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH meta failed: err=%v resp=%v", err, patchResp)
+	}
+	_ = patchResp.Body.Close()
+
+	// Reject invalid tag color
+	badReq, _ := http.NewRequest(
+		http.MethodPatch,
+		ts.URL+"/api/conversations/local-a/meta",
+		strings.NewReader(`{"tag_color":"neon"}`),
+	)
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil || badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid tag_color, got %v err=%v", badResp, err)
+	}
+	_ = badResp.Body.Close()
+
+	// Verify pinned item comes first and engine/tag filters work
+	listResp, err := http.Get(ts.URL + "/api/conversations?engine=ollama&tag=ProjetoX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	var listData struct {
+		Conversations []runner.ConversationSummary `json:"conversations"`
+		Tags          []string                     `json:"tags"`
+	}
+	_ = json.NewDecoder(listResp.Body).Decode(&listData)
+	if len(listData.Conversations) != 1 || listData.Conversations[0].ID != "local-a" || listData.Conversations[0].Title != "Sessão Fixada" || !listData.Conversations[0].Pinned {
+		t.Fatalf("unexpected filtered conversations: %+v", listData)
+	}
+
+	// Create snapshot and verify safe escaped HTML rendering
+	snapReqBytes, _ := json.Marshal(map[string]string{
+		"title":         "Teste <script>",
+		"content_md":    "# Titulo\n\n<script>alert(1)</script>\n\n```go\nprintln(\"ok\")\n```",
+		"theme_mode":    "light",
+		"theme_palette": "violet",
+	})
+	snapResp, err := http.Post(
+		ts.URL+"/api/snapshots",
+		"application/json",
+		bytes.NewReader(snapReqBytes),
+	)
+	if err != nil || snapResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/snapshots failed: err=%v resp=%v", err, snapResp)
+	}
+	defer snapResp.Body.Close()
+	var snapBody struct {
+		ID  string `json:"id"`
+		URL string `json:"url"`
+	}
+	_ = json.NewDecoder(snapResp.Body).Decode(&snapBody)
+	if snapBody.ID == "" || !strings.HasPrefix(snapBody.URL, "/s/") {
+		t.Fatalf("unexpected snapshot body: %+v", snapBody)
+	}
+
+	pageResp, err := http.Get(ts.URL + snapBody.URL)
+	if err != nil || pageResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET snapshot page failed: err=%v resp=%v", err, pageResp)
+	}
+	defer pageResp.Body.Close()
+	rawHTML, _ := io.ReadAll(pageResp.Body)
+	htmlStr := string(rawHTML)
+	if strings.Contains(htmlStr, "<script>alert(1)</script>") || !strings.Contains(htmlStr, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("snapshot did not escape script tag safely: %s", htmlStr)
+	}
+}

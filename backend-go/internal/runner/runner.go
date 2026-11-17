@@ -37,6 +37,10 @@ type ConversationSummary struct {
 	MessageCount int    `json:"message_count"`
 	Model        string `json:"model,omitempty"`
 	Engine       string `json:"engine"`
+	Pinned       bool   `json:"pinned"`
+	Tag          string `json:"tag,omitempty"`
+	TagColor     string `json:"tag_color,omitempty"`
+	CustomTitle  string `json:"custom_title,omitempty"`
 }
 
 // ConversationMessage represents one message in a conversation transcript.
@@ -53,6 +57,9 @@ type ConversationDetail struct {
 	UpdatedAt   string                `json:"updated_at,omitempty"`
 	Model       string                `json:"model,omitempty"`
 	Engine      string                `json:"engine"`
+	Pinned      bool                  `json:"pinned,omitempty"`
+	Tag         string                `json:"tag,omitempty"`
+	TagColor    string                `json:"tag_color,omitempty"`
 	ActiveJobID *string               `json:"active_job_id"`
 	Messages    []ConversationMessage `json:"messages"`
 }

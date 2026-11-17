@@ -79,4 +79,27 @@ func TestDBSettingsJobsAndFTS5(t *testing.T) {
 	if err != nil || j == nil || j.Status != "error" {
 		t.Fatalf("expected orphaned job status=error, got %+v err=%v", j, err)
 	}
+
+	// 5. Conversation metadata + snapshots
+	pinTrue := true
+	title := "Infra Docker Pi"
+	tag := "Infra"
+	tagColor := "emerald"
+	meta, err := reopened.UpsertConversationMeta("local-1", ConversationMetaPatch{
+		Pinned:      &pinTrue,
+		CustomTitle: &title,
+		Tag:         &tag,
+		TagColor:    &tagColor,
+	})
+	if err != nil || !meta.Pinned || meta.CustomTitle != "Infra Docker Pi" || meta.Tag != "Infra" {
+		t.Fatalf("UpsertConversationMeta failed: %+v err=%v", meta, err)
+	}
+	snap, err := reopened.CreateSnapshot("snap-1", "Resumo", "# Olá\n\n```go\nfmt.Println(1)\n```", "light", "violet")
+	if err != nil || snap.ID != "snap-1" {
+		t.Fatalf("CreateSnapshot failed: %+v err=%v", snap, err)
+	}
+	loadedSnap, err := reopened.GetSnapshot("snap-1")
+	if err != nil || loadedSnap == nil || loadedSnap.ThemePalette != "violet" {
+		t.Fatalf("GetSnapshot failed: %+v err=%v", loadedSnap, err)
+	}
 }
