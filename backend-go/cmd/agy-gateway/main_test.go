@@ -529,3 +529,49 @@ func TestDeleteConversationsLocalAndAGY(t *testing.T) {
 		t.Fatalf("expected 400 for invalid id '..\\\\escape', got %d", badResp.StatusCode)
 	}
 }
+
+func TestCockpitOptionalProxy(t *testing.T) {
+	// 1. Default Core keeps cockpit optional package disabled
+	muxOff, _, _ := newTestServer(t)
+	featRec := httptest.NewRecorder()
+	muxOff.ServeHTTP(featRec, httptest.NewRequest(http.MethodGet, "/api/features", nil))
+	var featPayload struct {
+		Features map[string]any `json:"features"`
+	}
+	_ = json.Unmarshal(featRec.Body.Bytes(), &featPayload)
+	if enabled, _ := featPayload.Features["cockpit"].(bool); enabled {
+		t.Fatalf("expected features.cockpit=false by default, got %+v", featPayload.Features)
+	}
+
+	// 2. Enabled proxy forwards path & Bearer token
+	var gotPath, gotAuth string
+	mockCockpit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"hostname":"pc-test","allow_power":true}`)
+	}))
+	defer mockCockpit.Close()
+
+	muxOn, _, _ := newTestServerWithEnv(t, map[string]string{
+		"ENABLE_COCKPIT": "true",
+		"COCKPIT_URL":    mockCockpit.URL,
+		"COCKPIT_TOKEN":  "bridge-secret",
+	})
+	rec := httptest.NewRecorder()
+	muxOn.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/cockpit/overview", nil))
+	if rec.Code != http.StatusOK || gotPath != "/overview" || gotAuth != "Bearer bridge-secret" {
+		t.Fatalf("proxy mismatch: status=%d path=%q auth=%q body=%s", rec.Code, gotPath, gotAuth, rec.Body.String())
+	}
+
+	// 3. Offline optional backend returns clean 502 JSON
+	muxDown, _, _ := newTestServerWithEnv(t, map[string]string{
+		"ENABLE_COCKPIT": "true",
+		"COCKPIT_URL":    "http://127.0.0.1:1",
+	})
+	downRec := httptest.NewRecorder()
+	muxDown.ServeHTTP(downRec, httptest.NewRequest(http.MethodGet, "/api/cockpit/overview", nil))
+	if downRec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 when cockpit unreachable, got %d", downRec.Code)
+	}
+}
