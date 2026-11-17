@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { untrack, type Component } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
+  import { loadOptionalCockpitPanel } from '../lib/optionalCockpit';
   import {
     deleteConversation,
     fetchConversations,
@@ -25,6 +26,7 @@
     models,
     watchdogEnabled = true,
     telemetryEnabled = false,
+    cockpitEnabled = false,
     themeMode,
     themePalette,
     settings = $bindable<GatewaySettings>(),
@@ -39,6 +41,7 @@
     models: ModelInfo[];
     watchdogEnabled?: boolean;
     telemetryEnabled?: boolean;
+    cockpitEnabled?: boolean;
     themeMode: ThemeMode;
     themePalette: ThemePalette;
     settings: GatewaySettings;
@@ -48,6 +51,9 @@
     onSettingsSaved: (s: GatewaySettings) => void;
     onThemeChange: (mode: ThemeMode, palette: ThemePalette) => void;
   } = $props();
+
+  let CockpitComp = $state<Component<{ active?: boolean }> | null>(null);
+  let cockpitLoadAttempted = $state(false);
 
   let activeTab = $state<'chats' | 'settings'>('chats');
   let conversations = $state<ConversationSummary[]>([]);
@@ -204,7 +210,14 @@
         if (watchdogEnabled) {
           fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
         }
-        if (telemetryEnabled) {
+        if (cockpitEnabled && !CockpitComp && !cockpitLoadAttempted) {
+          cockpitLoadAttempted = true;
+          loadOptionalCockpitPanel()
+            .then((comp) => {
+              CockpitComp = comp;
+            })
+            .catch(() => {});
+        } else if (telemetryEnabled && !cockpitEnabled) {
           fetchTelemetry().then((t) => (telemetry = t)).catch(() => {});
         }
       }
@@ -629,7 +642,19 @@
           </div>
         {/if}
 
-        {#if telemetryEnabled && telemetry && telemetry.enabled}
+        {#if cockpitEnabled}
+          {#if CockpitComp}
+            <CockpitComp active={open && activeTab === 'settings'} />
+          {:else if cockpitLoadAttempted}
+            <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]">
+              Pacote opcional Cockpit habilitado, mas módulo UI não encontrado.
+            </div>
+          {:else}
+            <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]">
+              Carregando painel Cockpit...
+            </div>
+          {/if}
+        {:else if telemetryEnabled && telemetry && telemetry.enabled}
           <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-1.5 theme-surface">
             <div class="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]">
               <span>Telemetria de Hardware</span>
