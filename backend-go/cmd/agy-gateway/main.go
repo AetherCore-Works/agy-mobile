@@ -178,6 +178,34 @@ func newTerminalProxy(ttydWSURL string) http.Handler {
 	}
 }
 
+func newCockpitProxy(cockpitURL, token string) http.Handler {
+	parsed, err := url.Parse(strings.TrimRight(cockpitURL, "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"detail": "COCKPIT_URL inválida"})
+		})
+	}
+	baseURL := &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(baseURL)
+			subPath := strings.TrimPrefix(pr.In.URL.Path, "/api/cockpit")
+			if subPath == "" {
+				subPath = "/"
+			}
+			pr.Out.URL.Path = basePath + subPath
+			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+			if token != "" {
+				pr.Out.Header.Set("Authorization", "Bearer "+token)
+			}
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"detail": "Cockpit optional package indisponível"})
+		},
+	}
+}
+
 func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, mgr *jobs.Manager, wd *watchdogState) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -858,6 +886,10 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, htmlOut)
 	})
+
+	if enabled, _ := cfg.Mods["cockpit"].(bool); enabled {
+		mux.Handle("/api/cockpit/", newCockpitProxy(cfg.CockpitURL, cfg.CockpitToken))
+	}
 
 	web.RegisterRoutes(mux, web.StaticFS())
 	return mux

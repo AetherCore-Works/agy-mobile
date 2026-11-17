@@ -27,6 +27,8 @@ type GatewaySettings struct {
 	OllamaURL           string
 	TtydWSURL           string
 	WhisperURL          string
+	CockpitURL          string
+	CockpitToken        string
 	IDEBridgeDir        string
 	IDEBridgeTimeoutSec int
 	Dirs                AppDirs
@@ -165,6 +167,8 @@ func Load() GatewaySettings {
 
 	wolMAC := envOr("WOL_MAC", defaultMAC)
 	whisperURL := envOr("WHISPER_URL", "")
+	cockpitURL := envOr("COCKPIT_URL", "")
+	cockpitToken := strings.TrimSpace(os.Getenv("COCKPIT_TOKEN"))
 	bridgeDir := envOr("IDE_BRIDGE_DIR", filepath.Join(dirs.DataDir, "agy-bridge"))
 	bridgeTimeout := 180
 	if rawT := envOr("IDE_BRIDGE_TIMEOUT_SEC", ""); rawT != "" {
@@ -182,6 +186,11 @@ func Load() GatewaySettings {
 		}
 	}
 
+	cockpitEnabled := boolEnv("ENABLE_COCKPIT", false) || cockpitURL != ""
+	if cockpitURL == "" {
+		cockpitURL = "http://127.0.0.1:8099"
+	}
+
 	mods := map[string]any{
 		"terminal":     boolEnv("ENABLE_TERMINAL", isGateway),
 		"wol":          boolEnv("ENABLE_WOL", isGateway && wolMAC != ""),
@@ -192,6 +201,7 @@ func Load() GatewaySettings {
 		"ai_memory":    boolEnv("ENABLE_AI_MEMORY", false) || envOr("AI_MEMORY_SERVER_URL", "") != "",
 		"ntfy":         boolEnv("ENABLE_NTFY", false) || envOr("NTFY_TOPIC", "") != "",
 		"whisper":      boolEnv("ENABLE_WHISPER", false) || whisperURL != "",
+		"cockpit":      cockpitEnabled,
 		"ide_bridge":   isIDEBridge,
 		"telemetry":    boolEnv("ENABLE_TELEMETRY", isGateway),
 		"slash_commands": []string{
@@ -209,6 +219,8 @@ func Load() GatewaySettings {
 		OllamaURL:           envOr("OLLAMA_URL", "http://127.0.0.1:11434"),
 		TtydWSURL:           envOr("TTYD_WS_URL", "ws://127.0.0.1:7681/terminal/ws"),
 		WhisperURL:          whisperURL,
+		CockpitURL:          cockpitURL,
+		CockpitToken:        cockpitToken,
 		IDEBridgeDir:        bridgeDir,
 		IDEBridgeTimeoutSec: bridgeTimeout,
 		Dirs:                dirs,

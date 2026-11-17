@@ -702,6 +702,7 @@
   {models}
   watchdogEnabled={features.watchdog !== false}
   telemetryEnabled={features.telemetry === true}
+  cockpitEnabled={features.cockpit === true}
   {themeMode}
   {themePalette}
   bind:settings={settings}
