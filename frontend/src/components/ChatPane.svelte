@@ -796,7 +796,7 @@
   </div>
 
   <!-- Centered Bottom Dock (HITL Card + Slash Palette + Composer Card) -->
-  <div class="w-full px-2.5 {isSplitView ? 'sm:px-3 pb-2.5' : 'sm:px-6 pb-2.5 sm:pb-4'} pt-1 shrink-0">
+  <div class="w-full px-2.5 {isSplitView ? 'sm:px-3 pb-2.5' : 'sm:px-6 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-4'} pt-1 shrink-0">
     <div class="{isSplitView ? 'w-full' : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} space-y-2">
       <!-- Interactive HITL Approval Card -->
       {#if approvalNeeded}

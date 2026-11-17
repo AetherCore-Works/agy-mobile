@@ -231,7 +231,7 @@
   <!-- Drawer -->
   <aside
     transition:fly={{ x: -320, duration: 220, easing: cubicOut }}
-    class="fixed inset-y-0 left-0 w-80 max-w-[88vw] bg-[var(--bg-elevated)] border-r border-[var(--border-subtle)] z-50 flex flex-col shadow-2xl select-none theme-surface"
+    class="fixed inset-y-0 left-0 w-80 max-w-[88vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-[var(--bg-elevated)] border-r border-[var(--border-subtle)] z-50 flex flex-col shadow-2xl select-none theme-surface"
   >
     <!-- Header -->
     <div class="p-3.5 border-b border-[var(--border-subtle)] flex items-center justify-between">
