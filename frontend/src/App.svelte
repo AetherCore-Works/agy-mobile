@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Icon from './components/Icon.svelte';
   import AiSpinner from './components/AiSpinner.svelte';
@@ -10,6 +10,7 @@
   import OutboxModal from './components/OutboxModal.svelte';
   import ShareModal from './components/ShareModal.svelte';
   import {
+    deleteConversation,
     fetchFeatures,
     fetchModels,
     fetchOutbox,
@@ -272,6 +273,40 @@
     shareOpen = true;
   }
 
+  // Delete Chat Confirmation State
+  let pendingDelete = $state<{ id: string; title: string } | null>(null);
+  let deletingChat = $state(false);
+  let deleteChatError = $state('');
+
+  function requestDeleteConversation(convId: string, title: string) {
+    deleteChatError = '';
+    pendingDelete = { id: convId, title: title || 'Conversa atual' };
+  }
+
+  function handleConversationDeleted(deletedId: string) {
+    for (const tab of tabs) {
+      if (tab.convId === deletedId) {
+        paneRefs[tab.id]?.newConversation();
+      }
+    }
+  }
+
+  async function confirmDeleteChat() {
+    if (!pendingDelete || deletingChat) return;
+    const targetId = pendingDelete.id;
+    deletingChat = true;
+    deleteChatError = '';
+    try {
+      await deleteConversation(targetId);
+      pendingDelete = null;
+      handleConversationDeleted(targetId);
+    } catch (err: any) {
+      deleteChatError = err?.message || 'Erro ao apagar chat';
+    } finally {
+      deletingChat = false;
+    }
+  }
+
   async function refreshStatusAndOutbox() {
     try {
       const st = await fetchStatus();
@@ -334,7 +369,10 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.key === 'Escape' && themeMenuOpen) themeMenuOpen = false;
+    if (e.key === 'Escape') {
+      if (themeMenuOpen) themeMenuOpen = false;
+      if (pendingDelete && !deletingChat) pendingDelete = null;
+    }
   }}
 />
 
@@ -398,6 +436,23 @@
       >
         <Icon name="share" size={17} />
       </button>
+
+      <!-- Delete Active Conversation -->
+      {#if focusedConvId}
+        <button
+          type="button"
+          onclick={() => {
+            const focusedTab = tabs.find((t) => t.id === focusedTabId);
+            const ctx = paneRefs[focusedTabId]?.getSnapshotContext();
+            requestDeleteConversation(focusedConvId, ctx?.title || focusedTab?.title || 'Conversa atual');
+          }}
+          class="p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-rose-400 transition-colors active:scale-95"
+          title="Apagar chat atual"
+          aria-label="Apagar chat atual"
+        >
+          <Icon name="trash" size={17} />
+        </button>
+      {/if}
 
       <!-- Theme & Color Palette Button -->
       <button
@@ -627,6 +682,7 @@
         {defaultModel}
         {defaultPermission}
         onOpenShare={openShareModal}
+        onRequestDelete={requestDeleteConversation}
         onOpenTerminal={() => (terminalOpen = true)}
         onFocus={() => {
           if (splitOpen) {
@@ -655,6 +711,7 @@
   onNewConversation={() => {
     paneRefs[focusedTabId]?.newConversation();
   }}
+  onConversationDeleted={handleConversationDeleted}
   onThemeChange={setTheme}
   onSettingsSaved={(s) => {
     defaultPermission = s.default_permission_mode;
@@ -675,3 +732,62 @@
   {themeMode}
   {themePalette}
 />
+
+{#if pendingDelete}
+  <div
+    transition:fade={{ duration: 150 }}
+    class="fixed inset-0 bg-[var(--bg-backdrop)] backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+  >
+    <button
+      type="button"
+      aria-label="Cancelar exclusão"
+      onclick={() => {
+        if (!deletingChat) pendingDelete = null;
+      }}
+      class="absolute inset-0 cursor-default"
+    ></button>
+
+    <div
+      transition:fly={{ y: 20, duration: 200, easing: cubicOut }}
+      class="relative w-full sm:max-w-sm bg-[var(--bg-elevated)] border-t sm:border border-[var(--border-subtle)] rounded-t-2xl sm:rounded-2xl p-4 space-y-3 shadow-2xl theme-surface"
+    >
+      <div class="flex items-start gap-3">
+        <div class="p-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 shrink-0">
+          <Icon name="trash" size={18} />
+        </div>
+        <div class="min-w-0 flex-1 space-y-1">
+          <h2 class="text-sm font-bold text-[var(--text-primary)]">Apagar chat?</h2>
+          <p class="text-xs text-[var(--text-muted)] leading-relaxed break-words">
+            A sessão <span class="font-semibold text-[var(--text-primary)]">"{pendingDelete.title}"</span> e seu histórico serão removidos permanentemente.
+          </p>
+        </div>
+      </div>
+
+      {#if deleteChatError}
+        <div class="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-400">
+          {deleteChatError}
+        </div>
+      {/if}
+
+      <div class="flex items-center justify-end gap-2 pt-1">
+        <button
+          type="button"
+          disabled={deletingChat}
+          onclick={() => (pendingDelete = null)}
+          class="px-3 py-1.5 rounded-xl bg-[var(--bg-chip)] hover:bg-[var(--bg-chip-hover)] text-xs font-medium text-[var(--text-secondary)] transition-colors"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          disabled={deletingChat}
+          onclick={confirmDeleteChat}
+          class="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95"
+        >
+          <Icon name="trash" size={13} />
+          <span>{deletingChat ? 'Apagando...' : 'Apagar chat'}</span>
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

@@ -58,4 +58,20 @@ func TestLocalRunnerBrainScan(t *testing.T) {
 	if detail.Messages[0].Content != "Testando histórico no Go" {
 		t.Fatalf("expected cleaned user message, got %q", detail.Messages[0].Content)
 	}
+
+	if _, err := r.DeleteAGYConversation(context.Background(), "../escape"); err == nil {
+		t.Fatal("expected error for traversal conversation id")
+	}
+	deleted, err := r.DeleteAGYConversation(context.Background(), "conv-abc-123")
+	if err != nil || !deleted {
+		t.Fatalf("DeleteAGYConversation deleted=%v err=%v", deleted, err)
+	}
+	itemsAfter, err := r.ListAGYConversations(context.Background(), 10)
+	if err != nil || len(itemsAfter) != 0 {
+		t.Fatalf("expected 0 conversations after delete, got len=%d err=%v", len(itemsAfter), err)
+	}
+	deletedAgain, err := r.DeleteAGYConversation(context.Background(), "conv-abc-123")
+	if err != nil || deletedAgain {
+		t.Fatalf("expected deletedAgain=false err=nil, got deleted=%v err=%v", deletedAgain, err)
+	}
 }

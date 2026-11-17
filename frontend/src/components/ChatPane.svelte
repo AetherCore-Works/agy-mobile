@@ -37,6 +37,7 @@
     defaultModel,
     defaultPermission,
     onOpenShare,
+    onRequestDelete,
     onOpenTerminal,
     onFocus,
     onMetaChange,
@@ -55,6 +56,7 @@
     defaultModel: string;
     defaultPermission: PermissionMode;
     onOpenShare: (title: string, singleMarkdown: string, messages: ChatMessage[]) => void;
+    onRequestDelete?: (convId: string, title: string) => void;
     onOpenTerminal: () => void;
     onFocus: () => void;
     onMetaChange?: (tabId: string, title: string, convId: string | null) => void;
@@ -646,6 +648,16 @@
             title="Compartilhar conversa"
           >
             <Icon name="share" size={13} />
+          </button>
+        {/if}
+        {#if conversationId && onRequestDelete}
+          <button
+            type="button"
+            onclick={() => conversationId && onRequestDelete(conversationId, sessionTitle || 'Conversa AGY')}
+            class="p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 transition-colors"
+            title="Apagar chat"
+          >
+            <Icon name="trash" size={13} />
           </button>
         {/if}
         <button

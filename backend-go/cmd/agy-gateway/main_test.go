@@ -464,3 +464,68 @@ func TestConversationMetaSortingFilteringAndSnapshots(t *testing.T) {
 		t.Fatalf("snapshot did not escape script tag safely: %s", htmlStr)
 	}
 }
+
+func TestDeleteConversationsLocalAndAGY(t *testing.T) {
+	mux, store, _ := newTestServer(t)
+	if err := store.EnsureLocalConversation("local-del", "Chat Local Apagar", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+	agyBrain := os.Getenv("AGY_BRAIN_DIR")
+	logsDir := filepath.Join(agyBrain, "agy-del-1", ".system_generated", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsDir, "transcript.jsonl"), []byte("{\"type\":\"USER_INPUT\",\"content\":\"oi\"}\n{\"type\":\"PLANNER_RESPONSE\",\"content\":\"ola\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// 1. Delete local conversation
+	delLocalReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/conversations/local-del", nil)
+	delLocalResp, err := http.DefaultClient.Do(delLocalReq)
+	if err != nil || delLocalResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE local failed: err=%v resp=%v", err, delLocalResp)
+	}
+	var localPayload map[string]any
+	_ = json.NewDecoder(delLocalResp.Body).Decode(&localPayload)
+	_ = delLocalResp.Body.Close()
+	if localPayload["deleted_local"] != true {
+		t.Fatalf("expected deleted_local=true, got %+v", localPayload)
+	}
+	getLocalResp, _ := http.Get(ts.URL + "/api/conversations/local-del")
+	_ = getLocalResp.Body.Close()
+	if getLocalResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after local delete, got %d", getLocalResp.StatusCode)
+	}
+
+	// 2. Delete AGY conversation
+	delAGYReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/conversations/agy-del-1", nil)
+	delAGYResp, err := http.DefaultClient.Do(delAGYReq)
+	if err != nil || delAGYResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE agy failed: err=%v resp=%v", err, delAGYResp)
+	}
+	var agyPayload map[string]any
+	_ = json.NewDecoder(delAGYResp.Body).Decode(&agyPayload)
+	_ = delAGYResp.Body.Close()
+	if agyPayload["deleted_agy"] != true {
+		t.Fatalf("expected deleted_agy=true, got %+v", agyPayload)
+	}
+	getAGYResp, _ := http.Get(ts.URL + "/api/conversations/agy-del-1")
+	_ = getAGYResp.Body.Close()
+	if getAGYResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after agy delete, got %d", getAGYResp.StatusCode)
+	}
+
+	// 3. Reject encoded path separator / traversal id
+	badReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/conversations/..%5Cescape", nil)
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid id '..\\\\escape', got %d", badResp.StatusCode)
+	}
+}

@@ -171,8 +171,12 @@ export async function createSnapshot(payload: {
   return res.json();
 }
 
-export async function deleteConversation(id: string): Promise<void> {
-  await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export async function deleteConversation(
+  id: string
+): Promise<{ ok: boolean; deleted_local: boolean; deleted_agy: boolean }> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Falha ao apagar conversa');
+  return res.json();
 }
 
 export async function uploadFile(file: File): Promise<{ ok: boolean; filename: string; path: string; size: number }> {
