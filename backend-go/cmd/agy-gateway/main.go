@@ -174,9 +174,12 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		if enabled, _ := cfg.Mods["wol"].(bool); enabled && cfg.WolMAC != "" {
 			wolMAC = cfg.WolMAC
 		}
+		online := r.CheckOnline(req.Context(), 1500*time.Millisecond)
+		activeOS := r.ActiveOS(req.Context())
 		writeJSON(w, http.StatusOK, map[string]any{
-			"online":      r.CheckOnline(req.Context(), 1500*time.Millisecond),
+			"online":      online,
 			"mode":        cfg.Mode,
+			"active_os":   activeOS,
 			"target_host": cfg.TargetHost,
 			"wol_mac":     wolMAC,
 			"target_user": cfg.TargetUser,
@@ -219,6 +222,12 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 
 	mux.Handle("/terminal/ws", newTerminalProxy(cfg.TtydWSURL))
 
+	var (
+		agyModelsMu        sync.Mutex
+		cachedAGYModels    []runner.ModelInfo
+		cachedAGYModelsExp time.Time
+	)
+
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, req *http.Request) {
 		models := []runner.ModelInfo{}
 		if enabled, _ := cfg.Mods["ollama"].(bool); enabled {
@@ -229,7 +238,26 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 				Badge: "Economia",
 			})
 		}
-		models = append(models, defaultAGYModels...)
+
+		agyModelsMu.Lock()
+		agyList := cachedAGYModels
+		expired := len(agyList) == 0 || time.Now().After(cachedAGYModelsExp)
+		agyModelsMu.Unlock()
+
+		if expired && r.CheckOnline(req.Context(), 1*time.Second) {
+			if live := r.ListAGYModels(req.Context()); len(live) > 0 {
+				agyList = live
+				agyModelsMu.Lock()
+				cachedAGYModels = live
+				cachedAGYModelsExp = time.Now().Add(5 * time.Minute)
+				agyModelsMu.Unlock()
+			}
+		}
+		if len(agyList) == 0 {
+			agyList = defaultAGYModels
+		}
+		models = append(models, agyList...)
+
 		if enabled, _ := cfg.Mods["ollama"].(bool); enabled && r.CheckOnline(req.Context(), 1*time.Second) {
 			models = append(models, r.ListOllamaModels(req.Context())...)
 		}

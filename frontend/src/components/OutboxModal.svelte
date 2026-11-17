@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { fade, fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
   import { deleteOutboxFile, fetchOutbox, type OutboxFile } from '../lib/api';
 
@@ -38,8 +40,14 @@
 </script>
 
 {#if open}
-  <div class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-    <div class="w-full sm:max-w-md bg-zinc-900 border-t sm:border border-zinc-800 rounded-t-2xl sm:rounded-2xl max-h-[82vh] flex flex-col shadow-2xl">
+  <div
+    transition:fade={{ duration: 180 }}
+    class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+  >
+    <div
+      transition:fly={{ y: 36, duration: 240, easing: cubicOut }}
+      class="w-full sm:max-w-md bg-zinc-900 border-t sm:border border-zinc-800 rounded-t-2xl sm:rounded-2xl max-h-[82vh] flex flex-col shadow-2xl"
+    >
       <div class="p-4 border-b border-zinc-800 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <Icon name="outbox" size={18} class="text-sky-400" />

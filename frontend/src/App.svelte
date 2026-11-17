@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
+  import { fly, scale } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { marked } from 'marked';
   import Icon from './components/Icon.svelte';
   import Sidebar from './components/Sidebar.svelte';
@@ -26,6 +28,7 @@
 
   // State
   let targetOnline = $state<boolean | null>(null);
+  let activeOS = $state<string>('linux');
   let gatewayMode = $state<'gateway' | 'standalone'>('gateway');
   let features = $state<Record<string, any>>({
     terminal: true,
@@ -72,8 +75,19 @@
   let isListening = $state(false);
   let recognition = $state<any>(null);
   let slashMenuOpen = $state(false);
+  let requestOutbox = $state(false);
+  let recentOutboxDeliveries = $state<string[]>([]);
+
+  // Viewport & Scroll State (iOS Safari / iPhone Pro Max keyboard & resume support)
+  let keyboardOpen = $state(false);
+  let isNearBottom = $state(true);
+  let showScrollBottomBtn = $state(false);
+  let lastViewportHeight = 0;
+  let viewportSyncRaf: number | null = null;
+  let viewportSyncUntil = 0;
 
   const slashCommands = [
+    { cmd: '/outbox', desc: 'Pedir para a IA salvar arquivo no Outbox p/ download' },
     { cmd: '/usage', desc: 'Cota restante de tokens/modelos' },
     { cmd: '/compact', desc: 'Compactar histórico da sessão' },
     { cmd: '/diff', desc: 'Exibir git status e diff atual' },
@@ -92,10 +106,16 @@
       newConversation();
       return;
     }
+    if (cmd === '/outbox') {
+      requestOutbox = true;
+      userInput = 'Gere/copie o arquivo solicitado para o Outbox (/home/ai/agy-outbox) para download no celular: ';
+      textareaEl?.focus();
+      return;
+    }
     if (cmd === '/plan') {
       permissionMode = 'readonly';
       messages = [...messages, { role: 'agent', content: '**Modo Planejamento (`readonly`) ativado.** Nenhuma alteração será aplicada sem revisão.' }];
-      scrollToBottom();
+      scrollToBottom(true);
       return;
     }
     if (cmd === '/diff') {
@@ -117,12 +137,12 @@
         `- **Recursos:** ${Object.entries(feat.features).filter(([, v]) => v === true).map(([k]) => `\`${k}\``).join(', ')}`,
       ].join('\n');
       messages = [...messages, { role: 'agent', content: summary }];
-      scrollToBottom();
+      scrollToBottom(true);
       return;
     }
     if (cmd === '/compact' && !conversationId) {
       messages = [...messages, { role: 'agent', content: '> Não há conversa ativa para compactar. Envie uma mensagem ou carregue uma sessão primeiro.' }];
-      scrollToBottom();
+      scrollToBottom(true);
       return;
     }
     userInput = cmd;
@@ -130,14 +150,101 @@
   }
 
   // DOM Refs
+  let shellEl: HTMLElement | undefined = $state();
   let chatContainer: HTMLElement | undefined = $state();
   let fileInputEl: HTMLInputElement | undefined = $state();
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  async function scrollToBottom() {
+  function handleChatScroll() {
+    if (!chatContainer) return;
+    const dist = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+    isNearBottom = dist < 110;
+    showScrollBottomBtn = dist > 140 && messages.length > 0;
+  }
+
+  async function scrollToBottom(force = false, smooth = false) {
     await tick();
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
+    if (!chatContainer) return;
+    if (!force && !isNearBottom) return;
+    const applyScroll = () => {
+      if (!chatContainer) return;
+      if (smooth && typeof chatContainer.scrollTo === 'function') {
+        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+      } else {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+      isNearBottom = true;
+      showScrollBottomBtn = false;
+    };
+    applyScroll();
+    requestAnimationFrame(applyScroll);
+  }
+
+  function applyViewportNow() {
+    if (window.scrollY !== 0 || window.scrollX !== 0) {
+      window.scrollTo(0, 0);
+    }
+    const vv = window.visualViewport;
+    if (vv) {
+      const prevH = lastViewportHeight || vv.height;
+      const changed = Math.abs(prevH - vv.height) > 1;
+      lastViewportHeight = vv.height;
+      keyboardOpen = window.innerHeight - vv.height > 110;
+
+      if (shellEl) {
+        shellEl.style.height = `${vv.height}px`;
+        shellEl.style.transform = `translate3d(0, ${vv.offsetTop}px, 0)`;
+      }
+
+      if (changed && (prevH - vv.height > 20 || document.activeElement === textareaEl || isNearBottom)) {
+        if (chatContainer && isNearBottom) {
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+          showScrollBottomBtn = false;
+        }
+      }
+    } else if (shellEl) {
+      shellEl.style.height = '100dvh';
+      shellEl.style.transform = 'translate3d(0, 0, 0)';
+    }
+  }
+
+  function startViewportSync(durationMs = 460) {
+    viewportSyncUntil = Math.max(viewportSyncUntil, performance.now() + durationMs);
+    applyViewportNow();
+    if (viewportSyncRaf !== null) return;
+
+    const tickFrame = (now: number) => {
+      applyViewportNow();
+      if (now < viewportSyncUntil) {
+        viewportSyncRaf = requestAnimationFrame(tickFrame);
+      } else {
+        viewportSyncRaf = null;
+      }
+    };
+    viewportSyncRaf = requestAnimationFrame(tickFrame);
+  }
+
+  function updateAppViewport() {
+    startViewportSync(260);
+  }
+
+  function scheduleKeyboardScroll() {
+    startViewportSync(480);
+    if (isNearBottom) {
+      scrollToBottom(true);
+    }
+  }
+
+  function resizeTextarea(el: HTMLTextAreaElement) {
+    const prevHeight = el.offsetHeight;
+    el.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(el.scrollHeight, 40), 120);
+    el.style.height = `${nextHeight}px`;
+    if (nextHeight !== prevHeight) {
+      applyViewportNow();
+      if (isNearBottom && chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
     }
   }
 
@@ -170,8 +277,55 @@
         .join('');
       return `<details open class="my-2 rounded-xl border border-zinc-700/80 bg-zinc-950 overflow-hidden"><summary class="px-3 py-1.5 bg-zinc-900 text-xs font-mono text-zinc-300 cursor-pointer select-none">Diff Visual</summary><div class="overflow-x-auto text-[11px] font-mono py-1.5 leading-5">${linesHtml}</div></details>`;
     }
-    return `<pre><code class="language-${escapeHtml(lang || '')}">${escapeHtml(text)}</code></pre>`;
+    const safeLang = escapeHtml((lang || '').trim());
+    const langLabel = safeLang || 'code';
+    const copyIconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>`;
+    return `<div class="code-block-wrap my-2 rounded-xl border border-zinc-800 bg-zinc-950 overflow-hidden"><div class="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border-b border-zinc-800/80 text-[11px] font-mono text-zinc-400"><span>${langLabel}</span><button type="button" data-copy-btn class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors cursor-pointer" title="Copiar comando/código">${copyIconSvg}<span>Copiar</span></button></div><pre class="!my-0 !border-0 !rounded-none"><code class="language-${safeLang}">${escapeHtml(text)}</code></pre></div>`;
   };
+
+  async function copyTextFallback(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fall through to textarea fallback
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function handleChatClick(e: MouseEvent) {
+    const target = e.target as HTMLElement | null;
+    const btn = target?.closest('[data-copy-btn]') as HTMLButtonElement | null;
+    if (!btn) return;
+    const wrap = btn.closest('.code-block-wrap');
+    const codeEl = wrap?.querySelector('code');
+    const codeText = codeEl?.textContent ?? '';
+    if (!codeText) return;
+    const ok = await copyTextFallback(codeText);
+    if (ok) {
+      const originalHtml = btn.innerHTML;
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Copiado</span>`;
+      btn.classList.add('text-emerald-300', 'bg-emerald-950/60');
+      setTimeout(() => {
+        btn.innerHTML = originalHtml;
+        btn.classList.remove('text-emerald-300', 'bg-emerald-950/60');
+      }, 1800);
+    }
+  }
 
   function renderMarkdown(text: string): string {
     return marked.parse(text || '', { async: false, renderer: mdRenderer }) as string;
@@ -317,6 +471,10 @@
                 }
                 messages = messages;
               }
+              if (Array.isArray(ev.outbox_files) && ev.outbox_files.length > 0) {
+                recentOutboxDeliveries = ev.outbox_files;
+              }
+              refreshStatusAndOutbox();
             } else if (ev.type === 'error') {
               jobFinished = true;
               messages[agentIdx].content += `\n\n> **Erro:** ${ev.error}`;
@@ -346,19 +504,27 @@
         messages = messages;
       }
       clearActiveJob();
-      scrollToBottom();
+      refreshStatusAndOutbox();
+      scrollToBottom(true);
     }
   }
 
   async function handleSubmit(e?: Event) {
     if (e) e.preventDefault();
-    const text = userInput.trim();
-    if ((!text && attachedFiles.length === 0) || isGenerating) return;
+    const rawText = userInput.trim();
+    if ((!rawText && attachedFiles.length === 0) || isGenerating) return;
 
-    const displayPrompt = text || `[${attachedFiles.length} arquivo(s) enviado(s)]`;
+    const wantsOutbox = requestOutbox;
+    const text = wantsOutbox
+      ? `${rawText || 'Analise os arquivos anexados.'}\n\n[ Importante: Salve ou copie o arquivo final gerado no diretório Outbox (/home/ai/agy-outbox) para download imediato no celular e informe o nome exato do arquivo. ]`
+      : rawText;
+
+    const displayPrompt = rawText || `[${attachedFiles.length} arquivo(s) enviado(s)]`;
     const filesToSend = attachedFiles.map((f) => f.path);
 
     userInput = '';
+    requestOutbox = false;
+    recentOutboxDeliveries = [];
     attachedFiles = [];
     if (textareaEl) textareaEl.style.height = 'auto';
 
@@ -366,7 +532,7 @@
     isGenerating = true;
     liveStatus = 'Iniciando no Remote Host...';
     startElapsedTimer();
-    scrollToBottom();
+    scrollToBottom(true);
 
     try {
       const job = await createJob({
@@ -396,12 +562,14 @@
 
   async function loadConversation(id: string) {
     clearActiveJob();
+    recentOutboxDeliveries = [];
     try {
       const data = await fetchConversation(id);
       conversationId = id;
       localStorage.setItem('agy_conv_id', id);
       messages = data.messages || [];
-      await scrollToBottom();
+      await scrollToBottom(true);
+      setTimeout(() => scrollToBottom(true), 80);
 
       if (data.active_job_id) {
         activeJobId = data.active_job_id;
@@ -418,6 +586,7 @@
 
   function newConversation() {
     clearActiveJob();
+    recentOutboxDeliveries = [];
     conversationId = null;
     localStorage.removeItem('agy_conv_id');
     messages = [];
@@ -445,16 +614,23 @@
   }
 
   function handleVisibilityChange() {
-    if (document.visibilityState === 'visible' && activeJobId && !streamAbort) {
-      liveStatus = 'Retomando stream...';
-      streamJobEvents(activeJobId, activeJobLastSeq);
+    if (document.visibilityState === 'visible') {
+      updateAppViewport();
+      refreshStatusAndOutbox();
+      if (activeJobId && !streamAbort) {
+        liveStatus = 'Retomando stream...';
+        streamJobEvents(activeJobId, activeJobLastSeq);
+      }
+      scrollToBottom(true);
+      setTimeout(() => scrollToBottom(true), 120);
     }
   }
 
   async function refreshStatusAndOutbox() {
     try {
-      const st = await fetchStatus();
+      const st: any = await fetchStatus();
       targetOnline = st.online;
+      if (st.active_os) activeOS = st.active_os;
     } catch {
       targetOnline = false;
     }
@@ -474,6 +650,12 @@
 
   onMount(async () => {
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pageshow', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    window.addEventListener('scroll', applyViewportNow, { passive: true });
+    window.visualViewport?.addEventListener('resize', updateAppViewport);
+    window.visualViewport?.addEventListener('scroll', updateAppViewport);
+    applyViewportNow();
 
     // Setup Speech Recognition
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -528,13 +710,23 @@
 
   onDestroy(() => {
     document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.removeEventListener('pageshow', handleVisibilityChange);
+    window.removeEventListener('focus', handleVisibilityChange);
+    window.removeEventListener('scroll', applyViewportNow);
+    window.visualViewport?.removeEventListener('resize', updateAppViewport);
+    window.visualViewport?.removeEventListener('scroll', updateAppViewport);
+    if (viewportSyncRaf !== null) cancelAnimationFrame(viewportSyncRaf);
     if (statusInterval) clearInterval(statusInterval);
     stopElapsedTimer();
     streamAbort?.abort();
   });
 </script>
 
-<div class="h-[100dvh] w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-zinc-950 text-zinc-100">
+<div
+  bind:this={shellEl}
+  style="height: 100dvh; will-change: transform, height;"
+  class="fixed inset-x-0 top-0 w-full max-w-[100vw] overflow-hidden flex flex-col bg-zinc-950 text-zinc-100"
+>
   <!-- Header -->
   <header class="h-13 bg-zinc-900/95 border-b border-zinc-800 px-2.5 flex items-center justify-between gap-2 shrink-0 select-none">
     <div class="flex items-center gap-2 min-w-0">
@@ -550,6 +742,11 @@
       <div class="flex items-center gap-1.5 min-w-0">
         <span class="w-2 h-2 rounded-full shrink-0 {targetOnline === true ? 'bg-emerald-500' : targetOnline === false ? 'bg-rose-500' : 'bg-amber-500'}"></span>
         <span class="text-xs font-bold tracking-tight truncate">{gatewayMode === 'standalone' ? 'AGY Local' : 'Remote Host'}</span>
+        {#if targetOnline === true && features.dual_boot}
+          <span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-[10px] font-mono text-sky-300 shrink-0">
+            {activeOS === 'windows' ? 'Win' : 'Linux'}
+          </span>
+        {/if}
         {#if targetOnline === false && features.wol}
           <button
             type="button"
@@ -601,33 +798,91 @@
   </header>
 
   <!-- Chat Area -->
-  <main bind:this={chatContainer} class="flex-1 overflow-y-auto px-3 py-4 space-y-3 overscroll-contain">
-    {#if messages.length === 0}
-      <div class="flex flex-col items-center justify-center h-full text-center px-4 py-8 text-zinc-500 select-none">
-        <img src="/static/icon.svg" class="w-14 h-14 rounded-2xl mb-3 shadow-lg" alt="AGY Logo" />
-        <h1 class="text-sm font-bold text-zinc-200">Antigravity Mobile Gateway</h1>
-        <p class="text-xs text-zinc-400 mt-1 max-w-xs">
-          Svelte 5 + SSE resumível. Suporta Gemini 4 Hydrogen, Extra, Ollama local, Inbox/Outbox e Terminal SSH nativo.
-        </p>
-      </div>
-    {:else}
-      {#each messages as msg, i}
-        <div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'} min-w-0">
-          {#if msg.role === 'user'}
-            <div class="max-w-[85%] rounded-2xl rounded-br-sm bg-sky-600 text-white px-3.5 py-2.5 text-sm shadow-sm whitespace-pre-wrap break-words">
-              {msg.content}
-            </div>
-          {:else}
-            <div
-              class="max-w-[94%] rounded-2xl rounded-bl-sm bg-zinc-900 border border-zinc-800/90 text-zinc-100 px-3.5 py-2.5 shadow-sm markdown-body {isGenerating && i === messages.length - 1 ? 'typing-cursor' : ''}"
-            >
-              {@html renderMarkdown(msg.content)}
-            </div>
-          {/if}
+  <div class="relative flex-1 min-h-0 flex flex-col">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <main
+      bind:this={chatContainer}
+      onscroll={handleChatScroll}
+      onclick={handleChatClick}
+      class="flex-1 overflow-y-auto px-3 py-4 space-y-3 overscroll-contain"
+    >
+      {#if messages.length === 0}
+        <div class="flex flex-col items-center justify-center h-full text-center px-4 py-8 text-zinc-500 select-none">
+          <img src="/static/icon.svg" class="w-14 h-14 rounded-2xl mb-3 gemini-aura transition-transform duration-300 hover:scale-105" alt="AGY Logo" />
+          <h1 class="text-sm font-bold text-zinc-200">Antigravity Mobile Gateway</h1>
+          <p class="text-xs text-zinc-400 mt-1 max-w-xs">
+            Svelte 5 + SSE resumível. Suporta Gemini 4 Hydrogen, Extra, Ollama local, Inbox/Outbox e Terminal SSH nativo.
+          </p>
         </div>
-      {/each}
+      {:else}
+        {#each messages as msg, i}
+          <div class="msg-enter flex {msg.role === 'user' ? 'justify-end' : 'justify-start'} min-w-0">
+            {#if msg.role === 'user'}
+              <div class="max-w-[85%] rounded-2xl rounded-br-sm bg-sky-600 text-white px-3.5 py-2.5 text-sm shadow-sm whitespace-pre-wrap break-words">
+                {msg.content}
+              </div>
+            {:else}
+              <div
+                class="max-w-[94%] rounded-2xl rounded-bl-sm bg-zinc-900 border border-zinc-800/90 text-zinc-100 px-3.5 py-2.5 shadow-sm markdown-body {isGenerating && i === messages.length - 1 ? 'typing-cursor' : ''}"
+              >
+                {@html renderMarkdown(msg.content)}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </main>
+
+    <!-- Floating Auto-Move / Scroll-to-Bottom Button -->
+    {#if showScrollBottomBtn}
+      <button
+        type="button"
+        transition:fly={{ y: 12, duration: 180, easing: cubicOut }}
+        onclick={() => scrollToBottom(true, true)}
+        class="absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-full bg-zinc-900/95 hover:bg-zinc-800 border border-sky-500/40 text-sky-300 shadow-lg backdrop-blur-sm text-xs font-medium flex items-center gap-1.5"
+        title="Ir para o fim da conversa"
+      >
+        <Icon name="chevron-down" size={15} />
+        <span>Fim da conversa</span>
+      </button>
     {/if}
-  </main>
+  </div>
+
+  <!-- Inline Outbox Ready Banner -->
+  {#if recentOutboxDeliveries.length > 0}
+    <div
+      transition:fly={{ y: 12, duration: 200, easing: cubicOut }}
+      class="mx-2.5 mb-2 p-2.5 rounded-xl bg-sky-950/50 border border-sky-500/40 text-sky-100 space-y-1.5 shrink-0"
+    >
+      <div class="flex items-center justify-between gap-2 text-xs font-semibold text-sky-300">
+        <div class="flex items-center gap-1.5">
+          <Icon name="outbox" size={14} />
+          <span>Arquivo(s) pronto(s) no Outbox para download</span>
+        </div>
+        <button
+          type="button"
+          onclick={() => (recentOutboxDeliveries = [])}
+          class="text-zinc-400 hover:text-zinc-200 p-0.5"
+          aria-label="Fechar aviso"
+        >
+          <Icon name="close" size={13} />
+        </button>
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        {#each recentOutboxDeliveries as fname}
+          <a
+            href={`/api/outbox/${encodeURIComponent(fname)}`}
+            download={fname}
+            class="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center gap-1.5"
+          >
+            <Icon name="download" size={13} />
+            <span class="truncate max-w-[200px]">{fname}</span>
+          </a>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   <!-- Interactive HITL Approval Card -->
   {#if approvalNeeded}
@@ -690,7 +945,7 @@
   {/if}
 
   <!-- Input Area -->
-  <footer class="bg-zinc-900/95 border-t border-zinc-800 p-2.5 space-y-2 shrink-0">
+  <footer class="bg-zinc-900/95 border-t border-zinc-800 p-2.5 {keyboardOpen ? 'pb-2' : 'pb-[max(0.625rem,env(safe-area-inset-bottom))]'} space-y-2 shrink-0">
     <!-- Model & Permission Selector Row -->
     <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
       <select
@@ -733,7 +988,10 @@
 
     <!-- Slash Commands Palette -->
     {#if slashMenuOpen || userInput.startsWith('/')}
-      <div class="bg-zinc-950 border border-zinc-800 rounded-xl p-1.5 space-y-1 max-h-48 overflow-y-auto">
+      <div
+        transition:fly={{ y: 10, duration: 180, easing: cubicOut }}
+        class="bg-zinc-950 border border-zinc-800 rounded-xl p-1.5 space-y-1 max-h-48 overflow-y-auto"
+      >
         {#each slashCommands.filter((c) => !userInput.startsWith('/') || c.cmd.startsWith(userInput.trim().toLowerCase())) as item}
           <button
             type="button"
@@ -747,12 +1005,12 @@
       </div>
     {/if}
 
-    <!-- Quick Actions Flex Row (/ + Clipe + Mic) -->
-    <div class="flex items-center gap-1.5">
+    <!-- Quick Actions Flex Row (/ + Clipe + Outbox Request + Mic) -->
+    <div class="flex items-center gap-1.5 overflow-x-auto">
       <button
         type="button"
         onclick={() => (slashMenuOpen = !slashMenuOpen)}
-        class="px-2.5 py-1.5 rounded-lg text-xs font-mono font-semibold flex items-center gap-1 transition-colors {slashMenuOpen ? 'bg-sky-600 text-white' : 'bg-zinc-800/90 text-sky-400 hover:bg-zinc-700'}"
+        class="px-2.5 py-1.5 rounded-lg text-xs font-mono font-semibold flex items-center gap-1 shrink-0 transition-colors {slashMenuOpen ? 'bg-sky-600 text-white' : 'bg-zinc-800/90 text-sky-400 hover:bg-zinc-700'}"
         title="Comandos Slash (/)"
       >
         <span>/</span>
@@ -770,18 +1028,28 @@
         type="button"
         onclick={() => fileInputEl?.click()}
         disabled={uploading}
-        class="px-2.5 py-1.5 rounded-lg bg-zinc-800/90 text-zinc-300 hover:text-sky-400 text-[11px] font-medium flex items-center gap-1"
+        class="px-2.5 py-1.5 rounded-lg bg-zinc-800/90 text-zinc-300 hover:text-sky-400 text-[11px] font-medium flex items-center gap-1 shrink-0"
         title="Anexar arquivo ou foto"
       >
         <Icon name="paperclip" size={14} />
         <span>Anexar</span>
       </button>
 
+      <button
+        type="button"
+        onclick={() => (requestOutbox = !requestOutbox)}
+        class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors {requestOutbox ? 'bg-sky-600 text-white border border-sky-400/50' : 'bg-zinc-800/90 text-zinc-300 hover:text-sky-400'}"
+        title="Instruir a IA a salvar o arquivo gerado no Outbox para download no celular"
+      >
+        <Icon name="download" size={14} />
+        <span>{requestOutbox ? 'Outbox Ativo' : 'Pedir Download'}</span>
+      </button>
+
       {#if recognition}
         <button
           type="button"
           onclick={toggleVoice}
-          class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors {isListening ? 'bg-rose-600 text-white animate-pulse' : 'bg-zinc-800/90 text-zinc-300'}"
+          class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors {isListening ? 'bg-rose-600 text-white animate-pulse' : 'bg-zinc-800/90 text-zinc-300'}"
           title="Ditado por voz"
         >
           <Icon name="mic" size={14} />
@@ -796,19 +1064,19 @@
         bind:this={textareaEl}
         bind:value={userInput}
         rows={1}
-        placeholder={uploading ? 'Enviando arquivo...' : 'Instrução para o Remote Host...'}
-        oninput={(e) => {
-          const el = e.currentTarget;
-          el.style.height = 'auto';
-          el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-        }}
+        enterkeyhint="send"
+        placeholder={uploading ? 'Enviando arquivo...' : requestOutbox ? 'Descreva o arquivo p/ enviar ao Outbox...' : 'Instrução para o Remote Host...'}
+        onfocus={scheduleKeyboardScroll}
+        onblur={() => startViewportSync(480)}
+        onclick={scheduleKeyboardScroll}
+        oninput={(e) => resizeTextarea(e.currentTarget)}
         onkeydown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSubmit();
           }
         }}
-        class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-sky-500 resize-none max-h-[120px]"
+        class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-base sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-sky-500 resize-none max-h-[120px]"
       ></textarea>
 
       {#if isGenerating && activeJobId}

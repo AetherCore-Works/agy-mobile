@@ -13,6 +13,7 @@ Project-level instructions for AI coding agents and automated contributors worki
 
 ## 3. Security & Privacy Boundaries
 - **Never commit secrets:** Do not commit `.env`, `ssh/id_*` private keys, API tokens, or `data/*.db` SQLite files.
+- **Safe Raspberry Pi Deployment (`scripts/deploy-rpi.sh`):** When deploying to `rpi:/opt/stacks/agy-gateway/`, ALWAYS use `./scripts/deploy-rpi.sh` (or explicitly pass `--exclude='ssh' --exclude='data' --exclude='.env'` to `rsync`). Running `rsync --delete` without `--exclude='ssh'` wipes the container's production SSH keypair on the Raspberry Pi.
 - **Least Privilege:** The gateway executes non-privileged commands as the service user (`ai`). Administrative (`sudo`) tasks are strictly Human-in-the-Loop via the interactive `agy-ttyd` terminal.
 - **Do not bypass permission modes:** Always respect the user-selected `permission_mode` (`readonly`, `copilot`, `autonomous`).
 
