@@ -8,5 +8,7 @@ data/
 .DS_Store
 frontend/node_modules/
 dist-release/
-agy-gateway
-agy-gateway.exe
+/agy-gateway
+/backend-go/agy-gateway
+/packages/cockpit/agy-cockpit
+*.exe
