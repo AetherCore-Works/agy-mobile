@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR" class="dark">
+<html lang="pt-BR" class="dark" data-theme="dark" data-palette="sky">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
@@ -10,8 +10,25 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <script>
+    (function () {
+      try {
+        var mode = localStorage.getItem('agy_theme_mode');
+        var palette = localStorage.getItem('agy_theme_palette');
+        if (mode !== 'light' && mode !== 'dark') mode = 'dark';
+        var validPalettes = { sky: 1, emerald: 1, violet: 1, indigo: 1, amber: 1, rose: 1 };
+        if (!validPalettes[palette]) palette = 'sky';
+        var root = document.documentElement;
+        root.dataset.theme = mode;
+        root.dataset.palette = palette;
+        root.classList.toggle('dark', mode === 'dark');
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', mode === 'dark' ? '#09090b' : '#f4f5f7');
+      } catch (e) {}
+    })();
+  </script>
 </head>
-<body class="bg-zinc-950 text-zinc-100 antialiased overflow-hidden">
+<body class="antialiased overflow-hidden">
   <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
