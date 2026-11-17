@@ -30,6 +30,7 @@ import (
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/runner"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/web"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/wol"
+	"github.com/google/uuid"
 )
 
 const appVersion = "3.3.0-go"
@@ -59,6 +60,21 @@ var validThemePalettes = map[string]bool{
 	"indigo":  true,
 	"amber":   true,
 	"rose":    true,
+}
+
+type snapshotCreateRequest struct {
+	Title        string `json:"title"`
+	ContentMD    string `json:"content_md"`
+	ThemeMode    string `json:"theme_mode"`
+	ThemePalette string `json:"theme_palette"`
+}
+
+func clipRunes(s string, maxLen int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= maxLen {
+		return string(r)
+	}
+	return string(r[:maxLen])
 }
 
 type settingsUpdateRequest struct {
@@ -333,8 +349,12 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 
 	mux.HandleFunc("GET /api/conversations", func(w http.ResponseWriter, req *http.Request) {
 		q := strings.TrimSpace(req.URL.Query().Get("q"))
+		engineFilter := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("engine")))
+		tagFilter := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("tag")))
 		limit := parseIntQuery(req.URL.Query().Get("limit"), 50, 1, 200)
 		offset := parseIntQuery(req.URL.Query().Get("offset"), 0, 0, 100000)
+
+		metaMap, _ := store.ListConversationMeta()
 
 		merged := []runner.ConversationSummary{}
 		if r.CheckOnline(req.Context(), 1500*time.Millisecond) {
@@ -342,7 +362,6 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			for _, c := range agyConvs {
 				c.Engine = "agy"
 				merged = append(merged, c)
-				_ = store.UpsertFTS(c.ID, c.Title, c.Title)
 			}
 		}
 
@@ -358,9 +377,58 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			})
 		}
 
+		tagSet := map[string]string{}
+		for i := range merged {
+			if m, ok := metaMap[merged[i].ID]; ok {
+				merged[i].Pinned = m.Pinned
+				merged[i].Tag = m.Tag
+				merged[i].TagColor = m.TagColor
+				merged[i].CustomTitle = m.CustomTitle
+				if m.CustomTitle != "" {
+					merged[i].Title = m.CustomTitle
+				}
+				if m.Tag != "" {
+					tagSet[strings.ToLower(m.Tag)] = m.Tag
+				}
+			}
+			if merged[i].Engine == "agy" {
+				ftsBody := strings.TrimSpace(merged[i].Title + " " + merged[i].Tag)
+				_ = store.UpsertFTS(merged[i].ID, merged[i].Title, ftsBody)
+			}
+		}
+
+		tags := make([]string, 0, len(tagSet))
+		for _, t := range tagSet {
+			tags = append(tags, t)
+		}
+		sort.Strings(tags)
+
 		sort.Slice(merged, func(i, j int) bool {
+			if merged[i].Pinned != merged[j].Pinned {
+				return merged[i].Pinned
+			}
 			return merged[i].UpdatedAt > merged[j].UpdatedAt
 		})
+
+		if engineFilter == "agy" || engineFilter == "ollama" {
+			filtered := []runner.ConversationSummary{}
+			for _, c := range merged {
+				if c.Engine == engineFilter {
+					filtered = append(filtered, c)
+				}
+			}
+			merged = filtered
+		}
+
+		if tagFilter != "" {
+			filtered := []runner.ConversationSummary{}
+			for _, c := range merged {
+				if strings.ToLower(c.Tag) == tagFilter {
+					filtered = append(filtered, c)
+				}
+			}
+			merged = filtered
+		}
 
 		if q != "" {
 			qLow := strings.ToLower(q)
@@ -373,6 +441,7 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			for _, c := range merged {
 				if ftsSet[c.ID] ||
 					strings.Contains(strings.ToLower(c.Title), qLow) ||
+					strings.Contains(strings.ToLower(c.Tag), qLow) ||
 					strings.Contains(strings.ToLower(c.ID), qLow) {
 					filtered = append(filtered, c)
 				}
@@ -393,17 +462,20 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			"conversations": page,
 			"total":         total,
 			"has_more":      end < total,
+			"tags":          tags,
 		})
 	})
 
 	mux.HandleFunc("GET /api/conversations/{conv_id}", func(w http.ResponseWriter, req *http.Request) {
 		convID := req.PathValue("conv_id")
+		meta, _ := store.GetConversationMeta(convID)
+
 		if localConv, err := store.GetLocalConversation(convID); err == nil && localConv != nil {
 			msgs := make([]runner.ConversationMessage, 0, len(localConv.Messages))
 			for _, m := range localConv.Messages {
 				msgs = append(msgs, runner.ConversationMessage{Role: m.Role, Content: m.Content})
 			}
-			writeJSON(w, http.StatusOK, runner.ConversationDetail{
+			detail := runner.ConversationDetail{
 				ID:          localConv.ID,
 				Title:       localConv.Title,
 				UpdatedAt:   localConv.UpdatedAt,
@@ -411,7 +483,16 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 				Engine:      "ollama",
 				ActiveJobID: activeJobIDForConversation(store, convID),
 				Messages:    msgs,
-			})
+			}
+			if meta != nil {
+				detail.Pinned = meta.Pinned
+				detail.Tag = meta.Tag
+				detail.TagColor = meta.TagColor
+				if meta.CustomTitle != "" {
+					detail.Title = meta.CustomTitle
+				}
+			}
+			writeJSON(w, http.StatusOK, detail)
 			return
 		}
 
@@ -419,6 +500,14 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			if detail, err := r.GetAGYConversation(req.Context(), convID); err == nil && detail != nil {
 				detail.Engine = "agy"
 				detail.ActiveJobID = activeJobIDForConversation(store, convID)
+				if meta != nil {
+					detail.Pinned = meta.Pinned
+					detail.Tag = meta.Tag
+					detail.TagColor = meta.TagColor
+					if meta.CustomTitle != "" {
+						detail.Title = meta.CustomTitle
+					}
+				}
 				writeJSON(w, http.StatusOK, detail)
 				return
 			}
@@ -426,9 +515,68 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Conversa não encontrada"})
 	})
 
+	mux.HandleFunc("PATCH /api/conversations/{conv_id}/meta", func(w http.ResponseWriter, req *http.Request) {
+		convID := req.PathValue("conv_id")
+		var body db.ConversationMetaPatch
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		if body.TagColor != nil && *body.TagColor != "" && !validThemePalettes[*body.TagColor] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Cor de etiqueta inválida"})
+			return
+		}
+		if body.CustomTitle != nil {
+			t := clipRunes(*body.CustomTitle, 120)
+			body.CustomTitle = &t
+		}
+		if body.Tag != nil {
+			t := clipRunes(*body.Tag, 32)
+			body.Tag = &t
+		}
+		updated, err := store.UpsertConversationMeta(convID, body)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		if updated.CustomTitle != "" || updated.Tag != "" {
+			_ = store.UpsertFTS(convID, updated.CustomTitle, strings.TrimSpace(updated.CustomTitle+" "+updated.Tag))
+		}
+		writeJSON(w, http.StatusOK, updated)
+	})
+
 	mux.HandleFunc("DELETE /api/conversations/{conv_id}", func(w http.ResponseWriter, req *http.Request) {
-		deleted, _ := store.DeleteLocalConversation(req.PathValue("conv_id"))
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted_local": deleted})
+		convID := strings.TrimSpace(req.PathValue("conv_id"))
+		if convID == "" || convID == "." || convID == ".." || strings.ContainsAny(convID, `/\`) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "ID de conversa inválido"})
+			return
+		}
+		if active, err := store.GetActiveJobs(); err == nil {
+			for _, j := range active {
+				if j.ConversationID != nil && *j.ConversationID == convID {
+					_ = mgr.CancelJob(j.ID)
+				}
+			}
+		}
+		deletedLocal, err := store.DeleteLocalConversation(convID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		deletedAGY := false
+		if !deletedLocal && !strings.HasPrefix(convID, "local-") && r.CheckOnline(req.Context(), 1500*time.Millisecond) {
+			d, err := r.DeleteAGYConversation(req.Context(), convID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+				return
+			}
+			deletedAGY = d
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":            true,
+			"deleted_local": deletedLocal,
+			"deleted_agy":   deletedAGY,
+		})
 	})
 
 	mux.HandleFunc("POST /api/jobs", func(w http.ResponseWriter, req *http.Request) {
@@ -550,6 +698,11 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 
 	// --- Inbox Upload & Outbox Files ---
 
+	var (
+		uploadMu  sync.Mutex
+		uploadSeq uint64
+	)
+
 	mux.HandleFunc("POST /api/upload", func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseMultipartForm(64 << 20); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Multipart inválido"})
@@ -568,8 +721,20 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
 			return
 		}
-		localPath := filepath.Join(uploadDir, cleanName)
+
+		uploadMu.Lock()
+		uploadSeq++
+		seq := uploadSeq
+		targetName := cleanName
+		ext := filepath.Ext(cleanName)
+		stem := strings.TrimSuffix(cleanName, ext)
+		_, statErr := os.Stat(filepath.Join(uploadDir, targetName))
+		if statErr == nil || strings.EqualFold(stem, "image") {
+			targetName = fmt.Sprintf("%s_%s_%d%s", stem, time.Now().Format("20060102-150405"), seq, ext)
+		}
+		localPath := filepath.Join(uploadDir, targetName)
 		out, err := os.Create(localPath)
+		uploadMu.Unlock()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
 			return
@@ -581,14 +746,14 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 			return
 		}
 
-		destPath, err := r.SaveToInbox(req.Context(), localPath, cleanName)
+		destPath, err := r.SaveToInbox(req.Context(), localPath, targetName)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": fmt.Sprintf("Erro ao salvar arquivo no inbox: %v", err)})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":       true,
-			"filename": cleanName,
+			"filename": targetName,
 			"path":     destPath,
 			"size":     written,
 		})
@@ -687,6 +852,56 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		}
 		_ = json.NewDecoder(upResp.Body).Decode(&parsed)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "text": strings.TrimSpace(parsed.Text)})
+	})
+
+	// Read-only Shareable Snapshots
+	mux.HandleFunc("POST /api/snapshots", func(w http.ResponseWriter, req *http.Request) {
+		var body snapshotCreateRequest
+		if err := json.NewDecoder(io.LimitReader(req.Body, 2<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		if strings.TrimSpace(body.ContentMD) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Conteúdo vazio"})
+			return
+		}
+		mode := "dark"
+		if body.ThemeMode == "light" {
+			mode = "light"
+		}
+		palette := "sky"
+		if validThemePalettes[body.ThemePalette] {
+			palette = body.ThemePalette
+		}
+		title := clipRunes(body.Title, 120)
+		if title == "" {
+			title = "Snapshot AGY"
+		}
+		id := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+		snap, err := store.CreateSnapshot(id, title, body.ContentMD, mode, palette)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":         snap.ID,
+			"url":        "/s/" + snap.ID,
+			"created_at": snap.CreatedAt,
+		})
+	})
+
+	mux.HandleFunc("GET /s/{snapshot_id}", func(w http.ResponseWriter, req *http.Request) {
+		snapID := req.PathValue("snapshot_id")
+		snap, err := store.GetSnapshot(snapID)
+		if err != nil || snap == nil {
+			http.NotFound(w, req)
+			return
+		}
+		htmlOut := web.RenderSnapshotHTML(snap.Title, snap.ContentMD, snap.CreatedAt, snap.ThemeMode, snap.ThemePalette)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, htmlOut)
 	})
 
 	web.RegisterRoutes(mux, web.StaticFS())

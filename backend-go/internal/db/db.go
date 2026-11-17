@@ -70,6 +70,34 @@ type LocalConversationDetail struct {
 	Messages  []LocalMessage `json:"messages"`
 }
 
+// ConversationMeta stores user-defined organization metadata for any AGY or Ollama session.
+type ConversationMeta struct {
+	ConvID      string `json:"conv_id"`
+	Pinned      bool   `json:"pinned"`
+	CustomTitle string `json:"custom_title"`
+	Tag         string `json:"tag"`
+	TagColor    string `json:"tag_color"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// ConversationMetaPatch holds optional partial updates to conversation metadata.
+type ConversationMetaPatch struct {
+	Pinned      *bool   `json:"pinned"`
+	CustomTitle *string `json:"custom_title"`
+	Tag         *string `json:"tag"`
+	TagColor    *string `json:"tag_color"`
+}
+
+// Snapshot stores an immutable read-only shareable Markdown snapshot.
+type Snapshot struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	ContentMD    string `json:"content_md"`
+	ThemeMode    string `json:"theme_mode"`
+	ThemePalette string `json:"theme_palette"`
+	CreatedAt    string `json:"created_at"`
+}
+
 func utcNow() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
@@ -161,6 +189,24 @@ func (g *GatewayDB) initSchema() error {
 	CREATE TABLE IF NOT EXISTS push_subscriptions (
 		endpoint TEXT PRIMARY KEY,
 		subscription_json TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS conversation_metadata (
+		conv_id TEXT PRIMARY KEY,
+		pinned INTEGER NOT NULL DEFAULT 0,
+		custom_title TEXT NOT NULL DEFAULT '',
+		tag TEXT NOT NULL DEFAULT '',
+		tag_color TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS snapshots (
+		id TEXT PRIMARY KEY,
+		title TEXT NOT NULL,
+		content_md TEXT NOT NULL,
+		theme_mode TEXT NOT NULL DEFAULT 'dark',
+		theme_palette TEXT NOT NULL DEFAULT 'sky',
 		created_at TEXT NOT NULL
 	);
 
@@ -486,12 +532,153 @@ func (g *GatewayDB) DeleteLocalConversation(convID string) (bool, error) {
 	defer g.mu.Unlock()
 
 	_, _ = g.sql.Exec("DELETE FROM conversations_fts WHERE conv_id = ?", convID)
+	_, _ = g.sql.Exec("DELETE FROM conversation_metadata WHERE conv_id = ?", convID)
 	res, err := g.sql.Exec("DELETE FROM local_conversations WHERE id = ?", convID)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ListConversationMeta returns all persisted conversation organization metadata keyed by conv_id.
+func (g *GatewayDB) ListConversationMeta() (map[string]ConversationMeta, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	rows, err := g.sql.Query("SELECT conv_id, pinned, custom_title, tag, tag_color, updated_at FROM conversation_metadata")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]ConversationMeta{}
+	for rows.Next() {
+		var m ConversationMeta
+		var pinnedInt int
+		if err := rows.Scan(&m.ConvID, &pinnedInt, &m.CustomTitle, &m.Tag, &m.TagColor, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		m.Pinned = pinnedInt != 0
+		out[m.ConvID] = m
+	}
+	return out, rows.Err()
+}
+
+// GetConversationMeta fetches organization metadata for a single conversation, or nil if unset.
+func (g *GatewayDB) GetConversationMeta(convID string) (*ConversationMeta, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	var m ConversationMeta
+	var pinnedInt int
+	err := g.sql.QueryRow(
+		"SELECT conv_id, pinned, custom_title, tag, tag_color, updated_at FROM conversation_metadata WHERE conv_id = ?",
+		convID,
+	).Scan(&m.ConvID, &pinnedInt, &m.CustomTitle, &m.Tag, &m.TagColor, &m.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	m.Pinned = pinnedInt != 0
+	return &m, nil
+}
+
+// UpsertConversationMeta updates pin, custom title, and project tag metadata for a conversation.
+func (g *GatewayDB) UpsertConversationMeta(convID string, patch ConversationMetaPatch) (*ConversationMeta, error) {
+	now := utcNow()
+	g.mu.Lock()
+
+	cur := ConversationMeta{ConvID: convID}
+	var pinnedInt int
+	err := g.sql.QueryRow(
+		"SELECT pinned, custom_title, tag, tag_color FROM conversation_metadata WHERE conv_id = ?",
+		convID,
+	).Scan(&pinnedInt, &cur.CustomTitle, &cur.Tag, &cur.TagColor)
+	if err != nil && err != sql.ErrNoRows {
+		g.mu.Unlock()
+		return nil, err
+	}
+	cur.Pinned = pinnedInt != 0
+
+	if patch.Pinned != nil {
+		cur.Pinned = *patch.Pinned
+	}
+	if patch.CustomTitle != nil {
+		cur.CustomTitle = strings.TrimSpace(*patch.CustomTitle)
+	}
+	if patch.Tag != nil {
+		cur.Tag = strings.TrimSpace(*patch.Tag)
+	}
+	if patch.TagColor != nil {
+		cur.TagColor = strings.TrimSpace(*patch.TagColor)
+	}
+	cur.UpdatedAt = now
+
+	newPinnedInt := 0
+	if cur.Pinned {
+		newPinnedInt = 1
+	}
+	_, err = g.sql.Exec(
+		`INSERT INTO conversation_metadata (conv_id, pinned, custom_title, tag, tag_color, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(conv_id) DO UPDATE SET
+			pinned = excluded.pinned,
+			custom_title = excluded.custom_title,
+			tag = excluded.tag,
+			tag_color = excluded.tag_color,
+			updated_at = excluded.updated_at`,
+		convID, newPinnedInt, cur.CustomTitle, cur.Tag, cur.TagColor, now,
+	)
+	g.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &cur, nil
+}
+
+// CreateSnapshot persists an immutable read-only Markdown snapshot.
+func (g *GatewayDB) CreateSnapshot(id, title, contentMD, themeMode, themePalette string) (*Snapshot, error) {
+	now := utcNow()
+	g.mu.Lock()
+	_, err := g.sql.Exec(
+		`INSERT INTO snapshots (id, title, content_md, theme_mode, theme_palette, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, title, contentMD, themeMode, themePalette, now,
+	)
+	g.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &Snapshot{
+		ID:           id,
+		Title:        title,
+		ContentMD:    contentMD,
+		ThemeMode:    themeMode,
+		ThemePalette: themePalette,
+		CreatedAt:    now,
+	}, nil
+}
+
+// GetSnapshot loads a previously created read-only snapshot by ID.
+func (g *GatewayDB) GetSnapshot(id string) (*Snapshot, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	var s Snapshot
+	err := g.sql.QueryRow(
+		"SELECT id, title, content_md, theme_mode, theme_palette, created_at FROM snapshots WHERE id = ?",
+		id,
+	).Scan(&s.ID, &s.Title, &s.ContentMD, &s.ThemeMode, &s.ThemePalette, &s.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 // GetSettings returns persisted gateway preferences merged onto defaults.

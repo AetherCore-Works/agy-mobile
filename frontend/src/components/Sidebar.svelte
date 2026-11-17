@@ -7,6 +7,7 @@
     fetchConversations,
     fetchTelemetry,
     fetchWatchdog,
+    updateConversationMeta,
     updateSettings,
     type ConversationSummary,
     type GatewaySettings,
@@ -28,6 +29,7 @@
     settings = $bindable<GatewaySettings>(),
     onSelectConversation,
     onNewConversation,
+    onConversationDeleted,
     onSettingsSaved,
     onThemeChange,
   }: {
@@ -39,15 +41,19 @@
     themeMode: ThemeMode;
     themePalette: ThemePalette;
     settings: GatewaySettings;
-    onSelectConversation: (id: string) => void;
+    onSelectConversation: (id: string, title?: string) => void;
     onNewConversation: () => void;
+    onConversationDeleted?: (id: string) => void;
     onSettingsSaved: (s: GatewaySettings) => void;
     onThemeChange: (mode: ThemeMode, palette: ThemePalette) => void;
   } = $props();
 
   let activeTab = $state<'chats' | 'settings'>('chats');
   let conversations = $state<ConversationSummary[]>([]);
+  let availableTags = $state<string[]>([]);
   let searchQuery = $state('');
+  let engineFilter = $state<'' | 'agy' | 'ollama'>('');
+  let tagFilter = $state('');
   let loading = $state(false);
   let hasMore = $state(false);
   let offset = $state(0);
@@ -56,17 +62,34 @@
   let watchdog = $state<WatchdogState | null>(null);
   let telemetry = $state<TelemetryData | null>(null);
 
+  // Inline session organization editor state
+  let editingId = $state<string | null>(null);
+  let editTitle = $state('');
+  let editTag = $state('');
+  let editTagColor = $state('');
+  let savingMeta = $state(false);
+  let confirmDeleteId = $state<string | null>(null);
+  let deletingId = $state<string | null>(null);
+  let deleteError = $state('');
+
   const PAGE_SIZE = 30;
+
+  function resolveTagSwatch(colorId?: string): string {
+    return THEME_PALETTES.find((p) => p.id === colorId)?.swatch ?? '#71717a';
+  }
 
   async function load(reset = true) {
     loading = true;
     try {
       const nextOffset = reset ? 0 : offset;
-      const data = await fetchConversations(searchQuery, PAGE_SIZE, nextOffset);
+      const data = await fetchConversations(searchQuery, PAGE_SIZE, nextOffset, engineFilter, tagFilter);
       if (reset) {
         conversations = data.conversations;
       } else {
         conversations = [...conversations, ...data.conversations];
+      }
+      if (data.tags) {
+        availableTags = data.tags;
       }
       hasMore = data.has_more;
       offset = nextOffset + data.conversations.length;
@@ -81,10 +104,74 @@
     searchTimer = setTimeout(() => load(true), 250);
   }
 
-  async function handleDelete(e: MouseEvent, id: string) {
+  function setEngineFilter(next: '' | 'agy' | 'ollama') {
+    engineFilter = next;
+    load(true);
+  }
+
+  function toggleTagFilter(tag: string) {
+    tagFilter = tagFilter.toLowerCase() === tag.toLowerCase() ? '' : tag;
+    load(true);
+  }
+
+  async function togglePin(e: MouseEvent, c: ConversationSummary) {
     e.stopPropagation();
-    await deleteConversation(id);
+    await updateConversationMeta(c.id, { pinned: !c.pinned });
     await load(true);
+  }
+
+  function startEdit(e: MouseEvent, c: ConversationSummary) {
+    e.stopPropagation();
+    confirmDeleteId = null;
+    deleteError = '';
+    if (editingId === c.id) {
+      editingId = null;
+      return;
+    }
+    editingId = c.id;
+    editTitle = c.custom_title || c.title || '';
+    editTag = c.tag || '';
+    editTagColor = c.tag_color || '';
+  }
+
+  async function saveEdit(e: Event, c: ConversationSummary) {
+    e.stopPropagation();
+    savingMeta = true;
+    try {
+      await updateConversationMeta(c.id, {
+        custom_title: editTitle.trim(),
+        tag: editTag.trim(),
+        tag_color: editTag.trim() ? (editTagColor || 'sky') : '',
+      });
+      editingId = null;
+      await load(true);
+    } finally {
+      savingMeta = false;
+    }
+  }
+
+  function requestDelete(e: MouseEvent, id: string) {
+    e.stopPropagation();
+    editingId = null;
+    deleteError = '';
+    confirmDeleteId = confirmDeleteId === id ? null : id;
+  }
+
+  async function confirmDelete(e: MouseEvent, id: string) {
+    e.stopPropagation();
+    deletingId = id;
+    deleteError = '';
+    try {
+      await deleteConversation(id);
+      confirmDeleteId = null;
+      conversations = conversations.filter((c) => c.id !== id);
+      onConversationDeleted?.(id);
+      await load(true);
+    } catch (err: any) {
+      deleteError = err?.message || 'Falha ao apagar sessão';
+    } finally {
+      deletingId = null;
+    }
   }
 
   async function saveSettingsPatch(patch: Partial<GatewaySettings>) {
@@ -102,9 +189,14 @@
   }
 
   $effect(() => {
-    if (open && activeTab === 'chats') {
+    if (!open) {
+      confirmDeleteId = null;
+      deleteError = '';
+      return;
+    }
+    if (activeTab === 'chats') {
       load(true);
-    } else if (open && activeTab === 'settings') {
+    } else if (activeTab === 'settings') {
       if (watchdogEnabled) {
         fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
       }
@@ -128,7 +220,6 @@
     type="button"
     aria-label="Fechar menu"
     onclick={() => (open = false)}
-    data-no-ripple
     class="fixed inset-0 bg-[var(--bg-backdrop)] backdrop-blur-sm z-40"
   ></button>
 
@@ -142,9 +233,6 @@
       <div class="flex items-center gap-2">
         <Icon name="clock" size={17} class="text-[var(--accent-fg)]" />
         <h2 class="text-sm font-bold text-[var(--text-primary)]">AGY Gateway</h2>
-        {#if loading && conversations.length > 0}
-          <span class="px-1.5 py-0.5 rounded-full bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[10px] text-[var(--accent-fg)] animate-pulse">Sincronizando</span>
-        {/if}
       </div>
       <button
         type="button"
@@ -199,6 +287,47 @@
             class="w-full bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] transition-colors"
           />
         </div>
+
+        <!-- Engine Filter Pills -->
+        <div class="grid grid-cols-3 gap-1 p-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)]">
+          <button
+            type="button"
+            onclick={() => setEngineFilter('')}
+            class="py-1 rounded-md text-[11px] font-semibold transition-all {engineFilter === '' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            onclick={() => setEngineFilter('agy')}
+            class="py-1 rounded-md text-[11px] font-semibold transition-all {engineFilter === 'agy' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+          >
+            AGY
+          </button>
+          <button
+            type="button"
+            onclick={() => setEngineFilter('ollama')}
+            class="py-1 rounded-md text-[11px] font-semibold transition-all {engineFilter === 'ollama' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+          >
+            Local
+          </button>
+        </div>
+
+        <!-- Project Tag Filter Pills -->
+        {#if availableTags.length > 0}
+          <div class="flex items-center gap-1 overflow-x-auto pb-0.5">
+            {#each availableTags as t}
+              <button
+                type="button"
+                onclick={() => toggleTagFilter(t)}
+                class="px-2 py-0.5 rounded-full border text-[10px] font-medium shrink-0 flex items-center gap-1 transition-all {tagFilter.toLowerCase() === t.toLowerCase() ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
+              >
+                <Icon name="tag" size={10} />
+                <span>{t}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
 
       <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
@@ -207,39 +336,160 @@
         {:else if conversations.length === 0}
           <div class="text-center py-8 text-xs text-[var(--text-faint)]">Nenhuma sessão encontrada.</div>
         {:else}
-          {#each conversations as c (c.id)}
+          {#each conversations as c}
             <div
-              animate:flip={{ duration: 300, easing: cubicOut }}
-              role="button"
-              tabindex="0"
-              onclick={() => {
-                onSelectConversation(c.id);
-                open = false;
-              }}
-              onkeydown={(e) => {
-                if (e.key === 'Enter') {
-                  onSelectConversation(c.id);
-                  open = false;
-                }
-              }}
-              class="w-full text-left p-2.5 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-2 {activeConvId === c.id ? 'bg-[var(--accent-soft)] border-[var(--accent-border)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]'}"
+              class="rounded-xl border transition-all {activeConvId === c.id ? 'bg-[var(--accent-soft)] border-[var(--accent-border)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]'}"
             >
-              <div class="min-w-0 flex-1">
-                <div class="text-xs font-medium text-[var(--text-primary)] truncate">{c.title || 'Sem título'}</div>
-                <div class="flex items-center gap-1.5 mt-1 text-[10px] text-[var(--text-faint)]">
-                  <span class="px-1.5 py-0.5 rounded bg-[var(--bg-chip)] text-[var(--text-secondary)] font-mono">{c.engine === 'ollama' ? 'Local' : 'AGY'}</span>
-                  <span>{c.updated_at ? new Date(c.updated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+              <div
+                role="button"
+                tabindex="0"
+                onclick={() => {
+                  onSelectConversation(c.id, c.title);
+                  open = false;
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') {
+                    onSelectConversation(c.id, c.title);
+                    open = false;
+                  }
+                }}
+                class="w-full text-left p-2.5 cursor-pointer flex items-start justify-between gap-2"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    {#if c.pinned}
+                      <Icon name="pin" size={12} class="text-[var(--accent-fg)] shrink-0" />
+                    {/if}
+                    <span class="text-xs font-medium text-[var(--text-primary)] truncate">{c.title || 'Sem título'}</span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-[var(--text-faint)]">
+                    <span class="px-1.5 py-0.5 rounded bg-[var(--bg-chip)] text-[var(--text-secondary)] font-mono">
+                      {c.engine === 'ollama' ? 'Local' : 'AGY'}
+                    </span>
+                    {#if c.tag}
+                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                        <span class="w-1.5 h-1.5 rounded-full" style="background-color: {resolveTagSwatch(c.tag_color)};"></span>
+                        <span class="truncate max-w-[80px]">{c.tag}</span>
+                      </span>
+                    {/if}
+                    <span>{c.updated_at ? new Date(c.updated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-0.5 shrink-0">
+                  <button
+                    type="button"
+                    onclick={(e) => togglePin(e, c)}
+                    class="p-1 rounded transition-colors {c.pinned ? 'text-[var(--accent-fg)]' : 'text-[var(--text-faint)] hover:text-[var(--accent-fg)]'}"
+                    title={c.pinned ? 'Desafixar' : 'Fixar no topo'}
+                  >
+                    <Icon name="pin" size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onclick={(e) => startEdit(e, c)}
+                    class="p-1 rounded transition-colors {editingId === c.id ? 'text-[var(--accent-fg)]' : 'text-[var(--text-faint)] hover:text-[var(--accent-fg)]'}"
+                    title="Renomear / Etiqueta"
+                  >
+                    <Icon name="edit" size={13} />
+                  </button>
+                  {#if c.engine === 'ollama' || c.engine === 'agy'}
+                    <button
+                      type="button"
+                      onclick={(e) => requestDelete(e, c.id)}
+                      class="p-1 rounded transition-colors {confirmDeleteId === c.id ? 'text-rose-400 bg-rose-500/15' : 'text-[var(--text-faint)] hover:text-rose-400'}"
+                      title="Apagar chat"
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  {/if}
                 </div>
               </div>
-              {#if c.engine === 'ollama'}
-                <button
-                  type="button"
-                  onclick={(e) => handleDelete(e, c.id)}
-                  class="p-1 rounded text-[var(--text-faint)] hover:text-rose-400 shrink-0 transition-colors"
-                  title="Excluir"
+
+              {#if confirmDeleteId === c.id}
+                <div class="px-2.5 pb-2.5 pt-1.5 border-t border-rose-500/30 bg-rose-500/5 space-y-2 rounded-b-xl">
+                  <div class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                    Apagar este chat permanentemente?
+                  </div>
+                  {#if deleteError}
+                    <div class="text-[11px] text-rose-400">{deleteError}</div>
+                  {/if}
+                  <div class="flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      disabled={deletingId === c.id}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        confirmDeleteId = null;
+                        deleteError = '';
+                      }}
+                      class="px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingId === c.id}
+                      onclick={(e) => confirmDelete(e, c.id)}
+                      class="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-[11px] font-semibold transition-colors"
+                    >
+                      {deletingId === c.id ? 'Apagando...' : 'Apagar'}
+                    </button>
+                  </div>
+                </div>
+              {/if}
+
+              {#if editingId === c.id}
+                <form
+                  onsubmit={(e) => {
+                    e.preventDefault();
+                    saveEdit(e, c);
+                  }}
+                  class="px-2.5 pb-2.5 pt-1.5 border-t border-[var(--border-subtle)] space-y-2"
                 >
-                  <Icon name="trash" size={14} />
-                </button>
+                  <input
+                    type="text"
+                    bind:value={editTitle}
+                    placeholder="Nome personalizado da sessão..."
+                    class="w-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-fg)]"
+                  />
+                  <div class="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      bind:value={editTag}
+                      placeholder="Etiqueta (ex: Backend)"
+                      maxlength={32}
+                      class="flex-1 min-w-0 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-[11px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-fg)]"
+                    />
+                    <div class="flex items-center gap-1 shrink-0">
+                      {#each THEME_PALETTES as p}
+                        <button
+                          type="button"
+                          onclick={() => (editTagColor = p.id)}
+                          aria-label={p.label}
+                          class="w-4 h-4 rounded-full flex items-center justify-center transition-transform {editTagColor === p.id ? 'scale-110 ring-2 ring-[var(--text-primary)]' : 'opacity-75 hover:opacity-100'}"
+                          style="background-color: {p.swatch};"
+                        ></button>
+                      {/each}
+                    </div>
+                  </div>
+                  <div class="flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onclick={() => (editingId = null)}
+                      class="px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingMeta}
+                      class="px-2.5 py-1 rounded-md bg-[var(--accent-solid)] text-[var(--accent-on-solid)] text-[11px] font-semibold"
+                    >
+                      {savingMeta ? 'Salvando...' : 'Salvar'}
+                    </button>
+                  </div>
+                </form>
               {/if}
             </div>
           {/each}
