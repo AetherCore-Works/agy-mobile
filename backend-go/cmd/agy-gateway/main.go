@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/botbridge"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/db"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/jobs"
@@ -902,6 +903,228 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, htmlOut)
+	})
+
+	bridge := botbridge.New(cfg, store, mgr)
+
+	// --- Optional Package: Webhooks (Siri / Tasker / Home Assistant) ---
+	mux.HandleFunc("POST /api/webhook/prompt", func(w http.ResponseWriter, req *http.Request) {
+		if enabled, _ := cfg.Mods["webhooks"].(bool); !enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"detail": "Webhooks desativados (ENABLE_WEBHOOKS=false)"})
+			return
+		}
+		if !botbridge.VerifyBearer(req.Header.Get("Authorization"), cfg.WebhookSecret) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Token Bearer inválido"})
+			return
+		}
+		var body struct {
+			Prompt         string  `json:"prompt"`
+			Model          string  `json:"model"`
+			PermissionMode string  `json:"permission_mode"`
+			ConversationID *string `json:"conversation_id"`
+			Wait           bool    `json:"wait"`
+			TimeoutSec     int     `json:"timeout_sec"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		if strings.TrimSpace(body.Prompt) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Prompt não pode ser vazio"})
+			return
+		}
+		if !r.CheckOnline(req.Context(), 1500*time.Millisecond) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "Host offline"})
+			return
+		}
+		if body.Model == "" {
+			body.Model = "auto"
+		}
+		if body.PermissionMode == "" {
+			body.PermissionMode = "copilot"
+		}
+		started, err := mgr.StartJob(req.Context(), jobs.CreateRequest{
+			Prompt:         body.Prompt,
+			Model:          &body.Model,
+			PermissionMode: &body.PermissionMode,
+			ConversationID: body.ConversationID,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		jobID, _ := started["job_id"].(string)
+		if !body.Wait {
+			writeJSON(w, http.StatusOK, started)
+			return
+		}
+		timeoutSec := body.TimeoutSec
+		if timeoutSec <= 0 {
+			timeoutSec = 20
+		}
+		if timeoutSec > 55 {
+			timeoutSec = 55
+		}
+		res, waitErr := bridge.WaitForJobResult(req.Context(), jobID, time.Duration(timeoutSec)*time.Second)
+		if waitErr != nil {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"ok":      true,
+				"job_id":  jobID,
+				"status":  "running",
+				"pending": true,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":              res.Status == "completed" || res.Status == "done",
+			"job_id":          res.JobID,
+			"conversation_id": res.ConversationID,
+			"status":          res.Status,
+			"reply":           res.Reply,
+			"outbox_files":    res.OutboxFiles,
+			"error":           res.Error,
+		})
+	})
+
+	// --- Optional Package: WhatsApp Bot Bridge (Evolution API v2, DM Allowlist) ---
+	mux.HandleFunc("POST /api/bot/whatsapp/webhook", func(w http.ResponseWriter, req *http.Request) {
+		if enabled, _ := cfg.Mods["whatsapp_bot"].(bool); !enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"detail": "WhatsApp bot desativado"})
+			return
+		}
+		if cfg.WhatsAppWebhookSecret != "" {
+			got := req.Header.Get("X-Webhook-Secret")
+			if got == "" {
+				got = req.URL.Query().Get("secret")
+			}
+			if got != cfg.WhatsAppWebhookSecret {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Webhook secret inválido"})
+				return
+			}
+		}
+		var payload struct {
+			Event string `json:"event"`
+			Data  struct {
+				Key struct {
+					RemoteJID string `json:"remoteJid"`
+					FromMe    bool   `json:"fromMe"`
+				} `json:"key"`
+				Message struct {
+					Conversation        string `json:"conversation"`
+					ExtendedTextMessage struct {
+						Text string `json:"text"`
+					} `json:"extendedTextMessage"`
+				} `json:"message"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		number, allowed := bridge.IsAllowedWhatsApp(payload.Data.Key.RemoteJID, payload.Data.Key.FromMe)
+		if !allowed {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true})
+			return
+		}
+		text := strings.TrimSpace(payload.Data.Message.Conversation)
+		if text == "" {
+			text = strings.TrimSpace(payload.Data.Message.ExtendedTextMessage.Text)
+		}
+		if text == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true})
+			return
+		}
+		if !r.CheckOnline(req.Context(), 1500*time.Millisecond) {
+			_ = bridge.SendWhatsAppText(req.Context(), number, "Host offline no momento.")
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "offline": true})
+			return
+		}
+		autoModel, copilotPerm := "auto", "copilot"
+		started, err := mgr.StartJob(req.Context(), jobs.CreateRequest{
+			Prompt:         text,
+			Model:          &autoModel,
+			PermissionMode: &copilotPerm,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		jobID, _ := started["job_id"].(string)
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			res, err := bridge.WaitForJobResult(bgCtx, jobID, 3*time.Minute)
+			if err != nil {
+				_ = bridge.SendWhatsAppText(bgCtx, number, fmt.Sprintf("Erro ao aguardar resposta: %v", err))
+				return
+			}
+			reply := res.Reply
+			if res.Status == "error" && res.Error != "" {
+				reply = "Erro: " + res.Error
+			}
+			if len(res.OutboxFiles) > 0 {
+				reply += "\n\nOutbox: " + strings.Join(res.OutboxFiles, ", ")
+			}
+			if strings.TrimSpace(reply) != "" {
+				_ = bridge.SendWhatsAppText(bgCtx, number, reply)
+			}
+		}()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
+	})
+
+	// --- Optional Package: Discord DM Bridge (Aegys Allowlist) ---
+	mux.HandleFunc("POST /api/bot/discord/dm", func(w http.ResponseWriter, req *http.Request) {
+		if enabled, _ := cfg.Mods["discord_bot"].(bool); !enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"detail": "Discord bot desativado"})
+			return
+		}
+		if cfg.WebhookSecret != "" && !botbridge.VerifyBearer(req.Header.Get("Authorization"), cfg.WebhookSecret) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Token Bearer inválido"})
+			return
+		}
+		var body struct {
+			UserID string `json:"user_id"`
+			IsDM   bool   `json:"is_dm"`
+			Prompt string `json:"prompt"`
+			Wait   bool   `json:"wait"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		if !bridge.IsAllowedDiscordUser(body.UserID, body.IsDM) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"detail": "Usuário ou canal não autorizado (DM allowlist)"})
+			return
+		}
+		if strings.TrimSpace(body.Prompt) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Prompt vazio"})
+			return
+		}
+		autoModel, copilotPerm := "auto", "copilot"
+		started, err := mgr.StartJob(req.Context(), jobs.CreateRequest{
+			Prompt:         body.Prompt,
+			Model:          &autoModel,
+			PermissionMode: &copilotPerm,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		jobID, _ := started["job_id"].(string)
+		if body.Wait {
+			res, _ := bridge.WaitForJobResult(req.Context(), jobID, 25*time.Second)
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			res, err := bridge.WaitForJobResult(bgCtx, jobID, 3*time.Minute)
+			if err == nil && strings.TrimSpace(res.Reply) != "" {
+				_ = bridge.SendDiscordDM(bgCtx, body.UserID, res.Reply)
+			}
+		}()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
 	})
 
 	web.RegisterRoutes(mux, web.StaticFS())
