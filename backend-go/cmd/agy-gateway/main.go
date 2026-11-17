@@ -518,8 +518,37 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 	})
 
 	mux.HandleFunc("DELETE /api/conversations/{conv_id}", func(w http.ResponseWriter, req *http.Request) {
-		deleted, _ := store.DeleteLocalConversation(req.PathValue("conv_id"))
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted_local": deleted})
+		convID := strings.TrimSpace(req.PathValue("conv_id"))
+		if convID == "" || convID == "." || convID == ".." || strings.ContainsAny(convID, `/\`) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "ID de conversa inválido"})
+			return
+		}
+		if active, err := store.GetActiveJobs(); err == nil {
+			for _, j := range active {
+				if j.ConversationID != nil && *j.ConversationID == convID {
+					_ = mgr.CancelJob(j.ID)
+				}
+			}
+		}
+		deletedLocal, err := store.DeleteLocalConversation(convID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		deletedAGY := false
+		if !deletedLocal && !strings.HasPrefix(convID, "local-") && r.CheckOnline(req.Context(), 1500*time.Millisecond) {
+			d, err := r.DeleteAGYConversation(req.Context(), convID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+				return
+			}
+			deletedAGY = d
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":            true,
+			"deleted_local": deletedLocal,
+			"deleted_agy":   deletedAGY,
+		})
 	})
 
 	mux.HandleFunc("POST /api/jobs", func(w http.ResponseWriter, req *http.Request) {
