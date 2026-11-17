@@ -1,0 +1,46 @@
+services:
+  agy-gateway-dev:
+    build: .
+    container_name: agy-gateway-dev
+    environment:
+      - GATEWAY_MODE=standalone
+      - DATA_DIR=/data
+      - PORT=8089
+      - ENABLE_TELEMETRY=false
+      - ENABLE_TERMINAL=false
+      - ENABLE_WATCHDOG=false
+      - ENABLE_WOL=false
+      - ENABLE_WHISPER=false
+    tmpfs:
+      - /data
+    ports:
+      - "8089:8089"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8089/api/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.52.0-noble
+    profiles: ["test"]
+    depends_on:
+      agy-gateway-dev:
+        condition: service_healthy
+    environment:
+      - BASE_URL=http://agy-gateway-dev:8089
+      - NODE_PATH=/pw/node_modules
+    volumes:
+      - ./frontend/e2e:/e2e:ro
+      - pw-cache:/pw
+    command:
+      - bash
+      - -lc
+      - |
+        if [ ! -d /pw/node_modules/playwright ]; then
+          mkdir -p /pw && npm --prefix /pw install --no-save playwright@1.52.0 >/dev/null 2>&1
+        fi
+        node /e2e/gateway.spec.mjs
+
+volumes:
+  pw-cache:

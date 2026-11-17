@@ -662,7 +662,7 @@
           <button
             type="button"
             onclick={() => conversationId && onRequestDelete(conversationId, sessionTitle || 'Conversa AGY')}
-            class="p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 transition-colors"
+            class="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95"
             title="Apagar chat"
           >
             <Icon name="trash" size={13} />
@@ -1013,7 +1013,7 @@
                   handleSubmit();
                 }
               }}
-              class="flex-1 bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-base sm:text-sm text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] resize-none max-h-[120px] transition-colors"
+              class="flex-1 bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-base sm:text-sm leading-5 text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] resize-none overflow-y-auto max-h-[120px] transition-colors"
             ></textarea>
 
             {#if isGenerating && activeJobId}

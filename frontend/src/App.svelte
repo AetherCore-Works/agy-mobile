@@ -230,6 +230,8 @@
   }
 
   function handlePaneGeneratingChange(tabId: string, generating: boolean) {
+    const cur = tabs.find((t) => t.id === tabId);
+    if (!cur || cur.isGenerating === generating) return;
     tabs = tabs.map((t) => (t.id === tabId ? { ...t, isGenerating: generating } : t));
   }
 
@@ -478,7 +480,7 @@
             const ctx = paneRefs[focusedTabId]?.getSnapshotContext();
             requestDeleteConversation(focusedConvId, ctx?.title || focusedTab?.title || 'Conversa atual');
           }}
-          class="p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-rose-400 transition-colors active:scale-95"
+          class="p-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95"
           title="Apagar chat atual"
           aria-label="Apagar chat atual"
         >

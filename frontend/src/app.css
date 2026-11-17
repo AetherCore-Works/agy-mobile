@@ -367,6 +367,9 @@
   color: var(--text-primary);
   margin: 0 0.1rem;
   padding: 0.1rem 0.4rem;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: break-word;
   border-radius: 0.375rem;
 }
 
@@ -620,14 +623,16 @@
   50%, 100% { opacity: 0; }
 }
 
-/* Gemini-inspired Tactile Motion & Ripple */
-button,
-a[download],
-.tap-surface {
-  position: relative;
-  overflow: hidden;
-  -webkit-tap-highlight-color: transparent;
-  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), background-color 180ms ease, border-color 180ms ease, opacity 160ms ease;
+/* Gemini-inspired Tactile Motion & Ripple (layered so Tailwind .absolute/.fixed win) */
+@layer components {
+  button,
+  a[download],
+  .tap-surface {
+    position: relative;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), background-color 180ms ease, border-color 180ms ease, opacity 160ms ease;
+  }
 }
 
 button:not(:disabled):active,
