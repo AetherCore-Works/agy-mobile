@@ -374,3 +374,197 @@ func TestWhisperTranscribeMod(t *testing.T) {
 		t.Fatalf("unexpected transcribe payload: %+v", payload)
 	}
 }
+
+func TestConversationMetaSortingFilteringAndSnapshots(t *testing.T) {
+	mux, store, _ := newTestServer(t)
+	if err := store.EnsureLocalConversation("local-a", "Primeira", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := store.EnsureLocalConversation("local-b", "Segunda", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// Pin local-a, rename it, and attach a project tag
+	patchReq, _ := http.NewRequest(
+		http.MethodPatch,
+		ts.URL+"/api/conversations/local-a/meta",
+		strings.NewReader(`{"pinned":true,"custom_title":"Sessão Fixada","tag":"ProjetoX","tag_color":"emerald"}`),
+	)
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(patchReq)
+	if err != nil || patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH meta failed: err=%v resp=%v", err, patchResp)
+	}
+	_ = patchResp.Body.Close()
+
+	// Reject invalid tag color
+	badReq, _ := http.NewRequest(
+		http.MethodPatch,
+		ts.URL+"/api/conversations/local-a/meta",
+		strings.NewReader(`{"tag_color":"neon"}`),
+	)
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil || badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid tag_color, got %v err=%v", badResp, err)
+	}
+	_ = badResp.Body.Close()
+
+	// Verify pinned item comes first and engine/tag filters work
+	listResp, err := http.Get(ts.URL + "/api/conversations?engine=ollama&tag=ProjetoX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	var listData struct {
+		Conversations []runner.ConversationSummary `json:"conversations"`
+		Tags          []string                     `json:"tags"`
+	}
+	_ = json.NewDecoder(listResp.Body).Decode(&listData)
+	if len(listData.Conversations) != 1 || listData.Conversations[0].ID != "local-a" || listData.Conversations[0].Title != "Sessão Fixada" || !listData.Conversations[0].Pinned {
+		t.Fatalf("unexpected filtered conversations: %+v", listData)
+	}
+
+	// Create snapshot and verify safe escaped HTML rendering
+	snapReqBytes, _ := json.Marshal(map[string]string{
+		"title":         "Teste <script>",
+		"content_md":    "# Titulo\n\n<script>alert(1)</script>\n\n```go\nprintln(\"ok\")\n```",
+		"theme_mode":    "light",
+		"theme_palette": "violet",
+	})
+	snapResp, err := http.Post(
+		ts.URL+"/api/snapshots",
+		"application/json",
+		bytes.NewReader(snapReqBytes),
+	)
+	if err != nil || snapResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/snapshots failed: err=%v resp=%v", err, snapResp)
+	}
+	defer snapResp.Body.Close()
+	var snapBody struct {
+		ID  string `json:"id"`
+		URL string `json:"url"`
+	}
+	_ = json.NewDecoder(snapResp.Body).Decode(&snapBody)
+	if snapBody.ID == "" || !strings.HasPrefix(snapBody.URL, "/s/") {
+		t.Fatalf("unexpected snapshot body: %+v", snapBody)
+	}
+
+	pageResp, err := http.Get(ts.URL + snapBody.URL)
+	if err != nil || pageResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET snapshot page failed: err=%v resp=%v", err, pageResp)
+	}
+	defer pageResp.Body.Close()
+	rawHTML, _ := io.ReadAll(pageResp.Body)
+	htmlStr := string(rawHTML)
+	if strings.Contains(htmlStr, "<script>alert(1)</script>") || !strings.Contains(htmlStr, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("snapshot did not escape script tag safely: %s", htmlStr)
+	}
+}
+
+func TestDeleteConversationsLocalAndAGY(t *testing.T) {
+	mux, store, _ := newTestServer(t)
+	if err := store.EnsureLocalConversation("local-del", "Chat Local Apagar", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+	agyBrain := os.Getenv("AGY_BRAIN_DIR")
+	logsDir := filepath.Join(agyBrain, "agy-del-1", ".system_generated", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsDir, "transcript.jsonl"), []byte("{\"type\":\"USER_INPUT\",\"content\":\"oi\"}\n{\"type\":\"PLANNER_RESPONSE\",\"content\":\"ola\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// 1. Delete local conversation
+	delLocalReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/conversations/local-del", nil)
+	delLocalResp, err := http.DefaultClient.Do(delLocalReq)
+	if err != nil || delLocalResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE local failed: err=%v resp=%v", err, delLocalResp)
+	}
+	var localPayload map[string]any
+	_ = json.NewDecoder(delLocalResp.Body).Decode(&localPayload)
+	_ = delLocalResp.Body.Close()
+	if localPayload["deleted_local"] != true {
+		t.Fatalf("expected deleted_local=true, got %+v", localPayload)
+	}
+	getLocalResp, _ := http.Get(ts.URL + "/api/conversations/local-del")
+	_ = getLocalResp.Body.Close()
+	if getLocalResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after local delete, got %d", getLocalResp.StatusCode)
+	}
+
+	// 2. Delete AGY conversation
+	delAGYReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/conversations/agy-del-1", nil)
+	delAGYResp, err := http.DefaultClient.Do(delAGYReq)
+	if err != nil || delAGYResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE agy failed: err=%v resp=%v", err, delAGYResp)
+	}
+	var agyPayload map[string]any
+	_ = json.NewDecoder(delAGYResp.Body).Decode(&agyPayload)
+	_ = delAGYResp.Body.Close()
+	if agyPayload["deleted_agy"] != true {
+		t.Fatalf("expected deleted_agy=true, got %+v", agyPayload)
+	}
+	getAGYResp, _ := http.Get(ts.URL + "/api/conversations/agy-del-1")
+	_ = getAGYResp.Body.Close()
+	if getAGYResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after agy delete, got %d", getAGYResp.StatusCode)
+	}
+
+	// 3. Reject encoded path separator / traversal id
+	badReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/conversations/..%5Cescape", nil)
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid id '..\\\\escape', got %d", badResp.StatusCode)
+	}
+}
+
+func TestDuplicateUploadDeduplication(t *testing.T) {
+	mux, _, cfg := newTestServer(t)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, err := mw.CreateFormFile("file", "image.png")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = fw.Write([]byte("png-bytes-" + string(rune('0'+i))))
+		_ = mw.Close()
+
+		resp, err := http.Post(ts.URL+"/api/upload", mw.FormDataContentType(), &body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			OK       bool   `json:"ok"`
+			Filename string `json:"filename"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !payload.OK {
+			t.Fatalf("upload %d failed: status=%d payload=%+v", i, resp.StatusCode, payload)
+		}
+		if seen[payload.Filename] {
+			t.Fatalf("duplicate filename returned on upload %d: %s", i, payload.Filename)
+		}
+		seen[payload.Filename] = true
+		if _, err := os.Stat(filepath.Join(cfg.Dirs.InboxDir, payload.Filename)); err != nil {
+			t.Fatalf("expected uploaded file %s in inbox: %v", payload.Filename, err)
+		}
+	}
+}

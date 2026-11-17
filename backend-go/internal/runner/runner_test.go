@@ -64,4 +64,24 @@ func TestLocalRunnerBrainScan(t *testing.T) {
 	if detail.Messages[0].Content != "Testando histórico no Go" {
 		t.Fatalf("expected cleaned user message, got %q", detail.Messages[0].Content)
 	}
+
+	if _, err := r.DeleteAGYConversation(context.Background(), "../escape"); err == nil {
+		t.Fatal("expected error for traversal conversation id")
+	}
+	deleted, err := r.DeleteAGYConversation(context.Background(), "conv-abc-123")
+	if err != nil || !deleted {
+		t.Fatalf("DeleteAGYConversation deleted=%v err=%v", deleted, err)
+	}
+	backups, err := filepath.Glob(filepath.Join(tmp, "brain-backups", "conv-abc-123_*.tar.gz"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("expected 1 backup tar.gz before delete, got %v err=%v", backups, err)
+	}
+	itemsAfter, err := r.ListAGYConversations(context.Background(), 10)
+	if err != nil || len(itemsAfter) != 0 {
+		t.Fatalf("expected 0 conversations after delete, got len=%d err=%v", len(itemsAfter), err)
+	}
+	deletedAgain, err := r.DeleteAGYConversation(context.Background(), "conv-abc-123")
+	if err != nil || deletedAgain {
+		t.Fatalf("expected deletedAgain=false err=nil, got deleted=%v err=%v", deletedAgain, err)
+	}
 }

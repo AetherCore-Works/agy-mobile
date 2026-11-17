@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +40,10 @@ type ConversationSummary struct {
 	MessageCount int    `json:"message_count"`
 	Model        string `json:"model,omitempty"`
 	Engine       string `json:"engine"`
+	Pinned       bool   `json:"pinned"`
+	Tag          string `json:"tag,omitempty"`
+	TagColor     string `json:"tag_color,omitempty"`
+	CustomTitle  string `json:"custom_title,omitempty"`
 }
 
 // ConversationMessage represents one message in a conversation transcript.
@@ -54,6 +60,9 @@ type ConversationDetail struct {
 	UpdatedAt   string                `json:"updated_at,omitempty"`
 	Model       string                `json:"model,omitempty"`
 	Engine      string                `json:"engine"`
+	Pinned      bool                  `json:"pinned,omitempty"`
+	Tag         string                `json:"tag,omitempty"`
+	TagColor    string                `json:"tag_color,omitempty"`
 	ActiveJobID *string               `json:"active_job_id"`
 	Messages    []ConversationMessage `json:"messages"`
 }
@@ -97,6 +106,7 @@ type Runner interface {
 	ListOllamaModels(ctx context.Context) []ModelInfo
 	ListAGYConversations(ctx context.Context, limit int) ([]ConversationSummary, error)
 	GetAGYConversation(ctx context.Context, convID string) (*ConversationDetail, error)
+	DeleteAGYConversation(ctx context.Context, convID string) (bool, error)
 	SaveToInbox(ctx context.Context, localTmpPath, cleanName string) (string, error)
 	ListOutbox(ctx context.Context) ([]OutboxFile, error)
 	OpenOutboxFile(ctx context.Context, filename string) (io.ReadCloser, func() error, error)
@@ -114,6 +124,14 @@ func Create(cfg config.GatewaySettings) Runner {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func validateConversationID(convID string) (string, error) {
+	clean := strings.TrimSpace(convID)
+	if clean == "" || clean == "." || clean == ".." || strings.ContainsAny(clean, `/\`) || filepath.Base(clean) != clean {
+		return "", fmt.Errorf("invalid conversation id")
+	}
+	return clean, nil
 }
 
 // ResolveAGYBinary finds the agy CLI executable via AGY_BIN env, PATH, or default install dir.
@@ -455,6 +473,83 @@ func (r *LocalRunner) GetAGYConversation(_ context.Context, convID string) (*Con
 	}, nil
 }
 
+func (r *LocalRunner) DeleteAGYConversation(_ context.Context, convID string) (bool, error) {
+	clean, err := validateConversationID(convID)
+	if err != nil {
+		return false, err
+	}
+	brain := filepath.Clean(r.brainDir())
+	target := filepath.Join(brain, clean)
+	if filepath.Dir(target) != brain {
+		return false, fmt.Errorf("invalid conversation path")
+	}
+	info, err := os.Stat(target)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("invalid conversation target")
+	}
+	if err := backupDirTarGz(brain, clean, target); err != nil {
+		return false, fmt.Errorf("backup before delete failed: %w", err)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func backupDirTarGz(brainDir, convID, targetDir string) error {
+	backupDir := filepath.Join(filepath.Dir(brainDir), "brain-backups")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return err
+	}
+	archivePath := filepath.Join(backupDir, fmt.Sprintf("%s_%s.tar.gz", convID, time.Now().Format("20060102-150405")))
+	out, err := os.Create(archivePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	gz := gzip.NewWriter(out)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	return filepath.Walk(targetDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(filepath.Dir(targetDir), path)
+		if err != nil {
+			return err
+		}
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(tw, f)
+			_ = f.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+		}
+		return nil
+	})
+}
+
 // --- SSHRunner (Gateway Mode: Pi -> Workstation) ---
 
 // SSHRunner executes AGY CLI, Ollama, and session sync remotely over SSH.
@@ -763,4 +858,20 @@ func (r *SSHRunner) GetAGYConversation(ctx context.Context, convID string) (*Con
 	}
 	detail.Engine = "agy"
 	return &detail, nil
+}
+
+func (r *SSHRunner) DeleteAGYConversation(ctx context.Context, convID string) (bool, error) {
+	clean, err := validateConversationID(convID)
+	if err != nil {
+		return false, err
+	}
+	pyCmd := fmt.Sprintf(
+		`python3 -c 'import os,shutil,sys,tarfile,time; bid=sys.argv[1]; b=os.path.normpath(os.environ.get("AGY_BRAIN_DIR") or os.path.expanduser("~/.gemini/antigravity-cli/brain")); p=os.path.join(b, bid); exists=os.path.isdir(p); bak_dir=os.path.join(os.path.dirname(b), "brain-backups"); (os.makedirs(bak_dir, exist_ok=True), tarfile.open(os.path.join(bak_dir, f"{bid}_{time.strftime(\"%%Y%%m%%d-%%H%%M%%S\")}.tar.gz"), "w:gz").add(p, arcname=bid), shutil.rmtree(p)) if exists else None; print("1" if exists else "0")' %s`,
+		shellQuote(clean),
+	)
+	out, err := r.runSSH(ctx, pyCmd, 5*time.Second)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "1", nil
 }
