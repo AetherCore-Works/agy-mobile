@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
@@ -189,21 +190,25 @@
   }
 
   $effect(() => {
-    if (!open) {
-      confirmDeleteId = null;
-      deleteError = '';
-      return;
-    }
-    if (activeTab === 'chats') {
-      load(true);
-    } else if (activeTab === 'settings') {
-      if (watchdogEnabled) {
-        fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
+    const isOpen = open;
+    const tab = activeTab;
+    untrack(() => {
+      if (!isOpen) {
+        confirmDeleteId = null;
+        deleteError = '';
+        return;
       }
-      if (telemetryEnabled) {
-        fetchTelemetry().then((t) => (telemetry = t)).catch(() => {});
+      if (tab === 'chats') {
+        load(true);
+      } else if (tab === 'settings') {
+        if (watchdogEnabled) {
+          fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
+        }
+        if (telemetryEnabled) {
+          fetchTelemetry().then((t) => (telemetry = t)).catch(() => {});
+        }
       }
-    }
+    });
   });
 
   const permOptions: { value: PermissionMode; label: string; desc: string; icon: 'shield' | 'zap' | 'eye' }[] = [
@@ -397,7 +402,7 @@
                     <button
                       type="button"
                       onclick={(e) => requestDelete(e, c.id)}
-                      class="p-1 rounded transition-colors {confirmDeleteId === c.id ? 'text-rose-400 bg-rose-500/15' : 'text-[var(--text-faint)] hover:text-rose-400'}"
+                      class="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95 {confirmDeleteId === c.id ? 'ring-2 ring-rose-300/60' : ''}"
                       title="Apagar chat"
                     >
                       <Icon name="trash" size={13} />
