@@ -172,14 +172,16 @@ func (r *LocalRunner) GetTelemetry(ctx context.Context) TelemetryData {
 // --- SSHRunner Inbox/Outbox & Telemetry ---
 
 func (r *SSHRunner) SaveToInbox(ctx context.Context, localTmpPath, cleanName string) (string, error) {
-	remotePath := fmt.Sprintf("%s/%s", strings.TrimRight(r.cfg.Dirs.InboxDir, "/"), cleanName)
+	t := r.resolveTarget(ctx)
+	remotePath := fmt.Sprintf("%s/%s", strings.TrimRight(t.inboxDir, "/\\"), cleanName)
 	scpArgs := []string{
 		"-i", r.cfg.SSHKey,
+		"-P", t.port,
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "BatchMode=yes",
 		localTmpPath,
-		fmt.Sprintf("%s@%s:%s", r.cfg.TargetUser, r.cfg.TargetHost, remotePath),
+		fmt.Sprintf("%s@%s:%s", t.user, t.host, remotePath),
 	}
 	cmd := exec.CommandContext(ctx, "scp", scpArgs...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -189,11 +191,20 @@ func (r *SSHRunner) SaveToInbox(ctx context.Context, localTmpPath, cleanName str
 }
 
 func (r *SSHRunner) ListOutbox(ctx context.Context) ([]OutboxFile, error) {
-	pyCmd := fmt.Sprintf(
-		`python3 -c 'import os,json; p=%s; os.makedirs(p,exist_ok=True); print(json.dumps([{"name":f,"size":os.path.getsize(os.path.join(p,f)),"mtime":os.path.getmtime(os.path.join(p,f))} for f in sorted(os.listdir(p)) if os.path.isfile(os.path.join(p,f))]))'`,
-		shellQuote(r.cfg.Dirs.OutboxDir),
-	)
-	stdout, err := r.runSSH(ctx, pyCmd, 4*time.Second)
+	t := r.resolveTarget(ctx)
+	var cmdStr string
+	if t.osName == "windows" {
+		cmdStr = fmt.Sprintf(
+			`powershell -NoProfile -Command "$p=%s; New-Item -ItemType Directory -Force -Path $p | Out-Null; $items = @(Get-ChildItem -LiteralPath $p -File | ForEach-Object { @{ name=$_.Name; size=[int64]$_.Length; mtime=[double]([DateTimeOffset]$_.LastWriteTimeUtc).ToUnixTimeSeconds() } }); ConvertTo-Json -InputObject $items -Compress"`,
+			winPowerShellQuote(t.outboxDir),
+		)
+	} else {
+		cmdStr = fmt.Sprintf(
+			`python3 -c 'import os,sys,json; p=sys.argv[1]; os.makedirs(p,exist_ok=True); print(json.dumps([{"name":f,"size":os.path.getsize(os.path.join(p,f)),"mtime":os.path.getmtime(os.path.join(p,f))} for f in sorted(os.listdir(p)) if os.path.isfile(os.path.join(p,f))]))' %s`,
+			shellQuote(t.outboxDir),
+		)
+	}
+	stdout, err := r.runSSH(ctx, cmdStr, 4*time.Second)
 	if err != nil || stdout == "" {
 		return []OutboxFile{}, nil
 	}
@@ -206,8 +217,15 @@ func (r *SSHRunner) ListOutbox(ctx context.Context) ([]OutboxFile, error) {
 }
 
 func (r *SSHRunner) OpenOutboxFile(ctx context.Context, filename string) (io.ReadCloser, func() error, error) {
-	remotePath := fmt.Sprintf("%s/%s", strings.TrimRight(r.cfg.Dirs.OutboxDir, "/"), filename)
-	args := append(r.sshBaseArgs(5), "cat "+shellQuote(remotePath))
+	t := r.resolveTarget(ctx)
+	remotePath := fmt.Sprintf("%s/%s", strings.TrimRight(t.outboxDir, "/\\"), filename)
+	var cmdStr string
+	if t.osName == "windows" {
+		cmdStr = "cmd /c type " + `"` + strings.ReplaceAll(remotePath, "/", `\`) + `"`
+	} else {
+		cmdStr = "cat " + shellQuote(remotePath)
+	}
+	args := append(r.sshBaseArgsFor(t, 5), cmdStr)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -220,7 +238,12 @@ func (r *SSHRunner) OpenOutboxFile(ctx context.Context, filename string) (io.Rea
 }
 
 func (r *SSHRunner) DeleteOutboxFile(ctx context.Context, filename string) error {
-	remotePath := fmt.Sprintf("%s/%s", strings.TrimRight(r.cfg.Dirs.OutboxDir, "/"), filename)
+	t := r.resolveTarget(ctx)
+	remotePath := fmt.Sprintf("%s/%s", strings.TrimRight(t.outboxDir, "/\\"), filename)
+	if t.osName == "windows" {
+		_, err := r.runSSH(ctx, "powershell -NoProfile -Command \"Remove-Item -LiteralPath "+winPowerShellQuote(remotePath)+" -Force -ErrorAction SilentlyContinue\"", 4*time.Second)
+		return err
+	}
 	_, err := r.runSSH(ctx, "rm -f "+shellQuote(remotePath), 4*time.Second)
 	return err
 }

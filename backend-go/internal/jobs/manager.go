@@ -124,17 +124,67 @@ func (m *Manager) RouteAutoModel(ctx context.Context, prompt string, attached []
 	return "gemini-4-hydrogen-high"
 }
 
+// buildAgentPrompt injects mobile Inbox/Outbox context into non-slash prompts without polluting stored user history.
+func (m *Manager) buildAgentPrompt(userPrompt string, attachedFiles []string) string {
+	trimmed := strings.TrimSpace(userPrompt)
+	if strings.HasPrefix(trimmed, "/") && len(attachedFiles) == 0 {
+		return trimmed
+	}
+
+	var prefix strings.Builder
+	if len(attachedFiles) > 0 {
+		fmt.Fprintf(
+			&prefix,
+			"[Arquivos anexados pelo usuário em %s: %s. Inspecione-os usando read_file conforme necessário.]\n",
+			m.cfg.Dirs.InboxDir,
+			strings.Join(attachedFiles, ", "),
+		)
+	}
+	if m.cfg.Dirs.OutboxDir != "" {
+		fmt.Fprintf(
+			&prefix,
+			"[Contexto AGY Mobile Outbox: Diretório para download no celular: %s. Sempre que o usuário pedir para baixar, exportar, enviar para o outbox ou disponibilizar qualquer arquivo/relatório/zip/script para o celular, salve ou copie o arquivo final obrigatoriamente dentro de %s e cite o nome exato do arquivo na resposta.]\n",
+			m.cfg.Dirs.OutboxDir,
+			m.cfg.Dirs.OutboxDir,
+		)
+	}
+	if prefix.Len() == 0 {
+		return trimmed
+	}
+	return prefix.String() + "\n" + trimmed
+}
+
+func (m *Manager) snapshotOutbox(ctx context.Context) map[string]float64 {
+	snap := map[string]float64{}
+	files, err := m.runner.ListOutbox(ctx)
+	if err != nil {
+		return snap
+	}
+	for _, f := range files {
+		snap[f.Name] = f.Mtime
+	}
+	return snap
+}
+
+func (m *Manager) detectNewOutboxFiles(ctx context.Context, before map[string]float64) []string {
+	files, err := m.runner.ListOutbox(ctx)
+	if err != nil {
+		return nil
+	}
+	var added []string
+	for _, f := range files {
+		prevMtime, existed := before[f.Name]
+		if !existed || f.Mtime > prevMtime+0.001 {
+			added = append(added, f.Name)
+		}
+	}
+	return added
+}
+
 // StartJob validates/persists a new job and launches its background execution goroutine.
 func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]any, error) {
-	prompt := strings.TrimSpace(req.Prompt)
-	if len(req.AttachedFiles) > 0 {
-		filesNote := fmt.Sprintf(
-			"[Arquivos anexados pelo usuário em %s: %s. Inspecione-os usando read_file conforme necessário.]\n\n",
-			m.cfg.Dirs.InboxDir,
-			strings.Join(req.AttachedFiles, ", "),
-		)
-		prompt = filesNote + prompt
-	}
+	userPrompt := strings.TrimSpace(req.Prompt)
+	agentPrompt := m.buildAgentPrompt(userPrompt, req.AttachedFiles)
 
 	requestedModel := "gemini-4-hydrogen-high"
 	if req.Model != nil && strings.TrimSpace(*req.Model) != "" {
@@ -142,7 +192,7 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 	}
 	selectedModel := requestedModel
 	if requestedModel == "auto" {
-		selectedModel = m.RouteAutoModel(ctx, prompt, req.AttachedFiles)
+		selectedModel = m.RouteAutoModel(ctx, userPrompt, req.AttachedFiles)
 	}
 
 	permMode := "copilot"
@@ -168,7 +218,7 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 	}
 
 	jobID := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
-	if _, err := m.store.CreateJob(jobID, convID, engine, selectedModel, permMode, prompt); err != nil {
+	if _, err := m.store.CreateJob(jobID, convID, engine, selectedModel, permMode, userPrompt); err != nil {
 		return nil, err
 	}
 
@@ -181,11 +231,11 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 	m.mu.Unlock()
 
 	if engine == "ollama" {
-		go m.runOllamaJob(jobCtx, jobID, *convID, prompt, selectedModel)
+		go m.runOllamaJob(jobCtx, jobID, *convID, agentPrompt, selectedModel)
 	} else if m.cfg.Mode == "ide-bridge" {
-		go m.runIDEBridgeJob(jobCtx, jobID, convID, prompt, selectedModel, permMode)
+		go m.runIDEBridgeJob(jobCtx, jobID, convID, agentPrompt, selectedModel, permMode)
 	} else {
-		go m.runAGYJob(jobCtx, jobID, convID, prompt, selectedModel, permMode)
+		go m.runAGYJob(jobCtx, jobID, convID, agentPrompt, selectedModel, permMode)
 	}
 
 	return map[string]any{
@@ -315,6 +365,8 @@ func (m *Manager) runOllamaJob(ctx context.Context, jobID, convID, prompt, selec
 func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, prompt, selectedModel, permMode string) {
 	defer m.cleanupJob(jobID)
 
+	beforeOutbox := m.snapshotOutbox(ctx)
+
 	permFlags := PermissionModes[permMode]
 	if len(permFlags) == 0 {
 		permFlags = PermissionModes["copilot"]
@@ -443,12 +495,14 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			if resStatus == "" {
 				resStatus = "SUCCESS"
 			}
+			newOutbox := m.detectNewOutboxFiles(ctx, beforeOutbox)
 			m.emitEvent(jobID, "done", map[string]any{
 				"type":            "done",
 				"conversation_id": nullableStr(currentConvID),
 				"status":          resStatus,
 				"executed_tools":  executedTools,
 				"response":        finalResp,
+				"outbox_files":    newOutbox,
 			})
 		}
 	}
@@ -474,20 +528,24 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 		m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": formatToolsSummary(executedTools)})
 		doneStatus := "completed"
 		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
+		newOutbox := m.detectNewOutboxFiles(ctx, beforeOutbox)
 		m.emitEvent(jobID, "done", map[string]any{
 			"type":            "done",
 			"conversation_id": nullableStr(currentConvID),
 			"status":          "SUCCESS",
 			"executed_tools":  executedTools,
+			"outbox_files":    newOutbox,
 		})
 	} else if jobRecord != nil && jobRecord.Status == "running" {
 		doneStatus := "completed"
 		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
+		newOutbox := m.detectNewOutboxFiles(ctx, beforeOutbox)
 		m.emitEvent(jobID, "done", map[string]any{
 			"type":            "done",
 			"conversation_id": nullableStr(currentConvID),
 			"status":          "SUCCESS",
 			"executed_tools":  executedTools,
+			"outbox_files":    newOutbox,
 		})
 	}
 

@@ -21,6 +21,12 @@ func TestCleanUserRequestAndTitleExtraction(t *testing.T) {
 	if got2 != "Anexo: foto1.png" {
 		t.Fatalf("unexpected attach-only title: %q", got2)
 	}
+
+	longPrompt := "Gostaria de melhorar ainda mais. Bem, seria possível nós fazermos isso agora?"
+	got3 := ExtractConversationTitle(longPrompt, "Conversa", 55)
+	if got3 != "Gostaria de melhorar ainda mais. Bem, seria possível…" {
+		t.Fatalf("unexpected word-boundary title: %q", got3)
+	}
 }
 
 func TestLocalRunnerBrainScan(t *testing.T) {

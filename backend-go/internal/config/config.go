@@ -22,6 +22,13 @@ type GatewaySettings struct {
 	Port                string
 	TargetHost          string
 	TargetUser          string
+	TargetSSHPort       string
+	WinTargetHost       string
+	WinTargetUser       string
+	WinSSHPort          string
+	WinAGYBin           string
+	WinInboxDir         string
+	WinOutboxDir        string
 	WolMAC              string
 	SSHKey              string
 	OllamaURL           string
@@ -182,10 +189,25 @@ func Load() GatewaySettings {
 		}
 	}
 
+	targetHost := envOr("TARGET_HOST", defaultHost)
+	targetUser := envOr("TARGET_USER", defaultUser)
+	targetSSHPort := envOr("TARGET_SSH_PORT", "22")
+	winTargetUser := envOr("WIN_TARGET_USER", "")
+	winTargetHost := envOr("WIN_TARGET_HOST", "")
+	if winTargetUser != "" && winTargetHost == "" {
+		winTargetHost = targetHost
+	}
+	winSSHPort := envOr("WIN_SSH_PORT", "22")
+	winAGYBin := envOr("WIN_AGY_BIN", "agy")
+	winInboxDir := envOr("WIN_INBOX_DIR", "")
+	winOutboxDir := envOr("WIN_OUTBOX_DIR", "")
+	dualBootEnabled := isGateway && winTargetUser != "" && winTargetHost != ""
+
 	mods := map[string]any{
 		"terminal":     boolEnv("ENABLE_TERMINAL", isGateway),
 		"wol":          boolEnv("ENABLE_WOL", isGateway && wolMAC != ""),
 		"watchdog":     boolEnv("ENABLE_WATCHDOG", isGateway),
+		"dual_boot":    dualBootEnabled,
 		"ollama":       boolEnv("ENABLE_OLLAMA", true),
 		"inbox_outbox": true,
 		"fts5_search":  true,
@@ -202,8 +224,15 @@ func Load() GatewaySettings {
 	return GatewaySettings{
 		Mode:                mode,
 		Port:                envOr("PORT", "8088"),
-		TargetHost:          envOr("TARGET_HOST", defaultHost),
-		TargetUser:          envOr("TARGET_USER", defaultUser),
+		TargetHost:          targetHost,
+		TargetUser:          targetUser,
+		TargetSSHPort:       targetSSHPort,
+		WinTargetHost:       winTargetHost,
+		WinTargetUser:       winTargetUser,
+		WinSSHPort:          winSSHPort,
+		WinAGYBin:           winAGYBin,
+		WinInboxDir:         winInboxDir,
+		WinOutboxDir:        winOutboxDir,
 		WolMAC:              wolMAC,
 		SSHKey:              envOr("SSH_KEY", "/root/.ssh/id_ed25519"),
 		OllamaURL:           envOr("OLLAMA_URL", "http://127.0.0.1:11434"),

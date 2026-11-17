@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { fade, fly } from 'svelte/transition';
+  import { flip } from 'svelte/animate';
+  import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
   import {
     deleteConversation,
@@ -118,16 +121,24 @@
     type="button"
     aria-label="Fechar menu"
     onclick={() => (open = false)}
+    transition:fade={{ duration: 200 }}
+    data-no-ripple
     class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
   ></button>
 
   <!-- Drawer -->
-  <aside class="fixed inset-y-0 left-0 w-80 max-w-[88vw] bg-zinc-900 border-r border-zinc-800 z-50 flex flex-col shadow-2xl select-none">
+  <aside
+    transition:fly={{ x: -320, duration: 260, easing: cubicOut }}
+    class="fixed inset-y-0 left-0 w-80 max-w-[88vw] bg-zinc-900 border-r border-zinc-800 z-50 flex flex-col shadow-2xl select-none"
+  >
     <!-- Header -->
     <div class="p-3.5 border-b border-zinc-800 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <Icon name="clock" size={17} class="text-sky-400" />
         <h2 class="text-sm font-bold text-zinc-100">AGY Gateway</h2>
+        {#if loading && conversations.length > 0}
+          <span class="px-1.5 py-0.5 rounded-full bg-sky-500/15 border border-sky-500/30 text-[10px] text-sky-300 animate-pulse">Sincronizando</span>
+        {/if}
       </div>
       <button type="button" onclick={() => (open = false)} class="p-1 rounded-lg text-zinc-400 hover:text-zinc-200">
         <Icon name="close" size={18} />
@@ -186,8 +197,9 @@
         {:else if conversations.length === 0}
           <div class="text-center py-8 text-xs text-zinc-500">Nenhuma sessão encontrada.</div>
         {:else}
-          {#each conversations as c}
+          {#each conversations as c (c.id)}
             <div
+              animate:flip={{ duration: 300, easing: cubicOut }}
               role="button"
               tabindex="0"
               onclick={() => {

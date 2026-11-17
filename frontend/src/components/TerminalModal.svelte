@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import Icon from './Icon.svelte';
@@ -191,6 +193,7 @@
 
 {#if open}
   <div
+    transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
     style="height: {modalHeight}; top: {modalTop};"
     class="fixed inset-x-0 bg-zinc-950 z-50 flex flex-col select-none"
   >
