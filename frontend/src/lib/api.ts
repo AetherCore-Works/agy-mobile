@@ -25,6 +25,8 @@ export interface GatewaySettings {
   default_permission_mode: PermissionMode;
   default_model: string;
   default_effort: string;
+  theme_mode?: 'dark' | 'light';
+  theme_palette?: 'sky' | 'emerald' | 'violet' | 'indigo' | 'amber' | 'rose';
 }
 
 export interface OutboxFile {
@@ -63,7 +65,12 @@ export async function fetchTelemetry(): Promise<TelemetryData> {
   return res.json();
 }
 
-export async function fetchFeatures(): Promise<{ version: string; features: Record<string, any> }> {
+export async function fetchFeatures(): Promise<{
+  version: string;
+  mode?: string;
+  dirs?: { inbox: string; outbox: string };
+  features: Record<string, any>;
+}> {
   const res = await fetch('/api/features');
   return res.json();
 }
