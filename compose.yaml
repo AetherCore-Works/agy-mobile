@@ -21,6 +21,9 @@ services:
       - ENABLE_WOL=${ENABLE_WOL:-true}
       - WHISPER_URL=${WHISPER_URL:-}
       - ENABLE_WHISPER=${ENABLE_WHISPER:-false}
+      - ENABLE_COCKPIT=${ENABLE_COCKPIT:-false}
+      - COCKPIT_URL=${COCKPIT_URL:-}
+      - COCKPIT_TOKEN=${COCKPIT_TOKEN:-}
 
   agy-ttyd:
     build:
@@ -31,3 +34,19 @@ services:
     restart: unless-stopped
     network_mode: host
     command: ["ttyd", "-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "ssh", "-t", "-o", "StrictHostKeyChecking=accept-new", "user@192.0.2.10", "exec fish -l -C 'function fish_greeting; end'"]
+
+  agy-cockpit:
+    profiles: ["cockpit"]
+    build:
+      context: ./packages/cockpit
+      dockerfile: Dockerfile
+    image: agy-cockpit:optional
+    container_name: agy-cockpit
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - COCKPIT_ADDR=${COCKPIT_ADDR:-127.0.0.1:8099}
+      - COCKPIT_ALLOW_POWER=${COCKPIT_ALLOW_POWER:-false}
+      - COCKPIT_TOKEN=${COCKPIT_TOKEN:-}
