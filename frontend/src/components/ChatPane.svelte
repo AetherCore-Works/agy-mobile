@@ -1009,6 +1009,7 @@
               }}
               onkeydown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
+                  if (window.matchMedia?.('(pointer: coarse)').matches) return;
                   e.preventDefault();
                   handleSubmit();
                 }

@@ -492,7 +492,7 @@
       <button
         type="button"
         onclick={() => (themeMenuOpen = !themeMenuOpen)}
-        class="relative p-2 rounded-xl border transition-all active:scale-95 {themeMenuOpen ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-chip)] border-transparent text-[var(--text-secondary)] hover:text-[var(--accent-fg)]'}"
+        class="relative !overflow-visible p-2 rounded-xl border transition-all active:scale-95 {themeMenuOpen ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-chip)] border-transparent text-[var(--text-secondary)] hover:text-[var(--accent-fg)]'}"
         title="Tema e paleta de cores"
         aria-label="Tema e paleta de cores"
       >
@@ -506,7 +506,7 @@
       <button
         type="button"
         onclick={() => (outboxOpen = true)}
-        class="relative p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
+        class="relative !overflow-visible p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
         title="Outbox"
       >
         <Icon name="outbox" size={18} />
