@@ -33,11 +33,19 @@ type GatewaySettings struct {
 	SSHKey              string
 	OllamaURL           string
 	TtydWSURL           string
-	WhisperURL          string
-	IDEBridgeDir        string
-	IDEBridgeTimeoutSec int
-	Dirs                AppDirs
-	Mods                map[string]any
+	WhisperURL             string
+	IDEBridgeDir           string
+	IDEBridgeTimeoutSec    int
+	WebhookSecret          string
+	EvolutionAPIURL        string
+	EvolutionInstance      string
+	EvolutionAPIKey        string
+	WhatsAppAllowedNumbers []string
+	WhatsAppWebhookSecret  string
+	DiscordBotToken        string
+	DiscordAllowedUserIDs  []string
+	Dirs                   AppDirs
+	Mods                   map[string]any
 }
 
 func envOr(name, fallback string) string {
@@ -216,31 +224,57 @@ func Load() GatewaySettings {
 		"whisper":      boolEnv("ENABLE_WHISPER", false) || whisperURL != "",
 		"ide_bridge":   isIDEBridge,
 		"telemetry":    boolEnv("ENABLE_TELEMETRY", isGateway),
+		"webhooks":     boolEnv("ENABLE_WEBHOOKS", false),
+		"whatsapp_bot": boolEnv("ENABLE_WHATSAPP_BOT", false),
+		"discord_bot":  boolEnv("ENABLE_DISCORD_BOT", false),
+		"telegram_bot": boolEnv("ENABLE_TELEGRAM_BOT", false),
 		"slash_commands": []string{
 			"/compact", "/usage", "/diff", "/mem", "/plan", "/clear", "/status",
 		},
 	}
 
 	return GatewaySettings{
-		Mode:                mode,
-		Port:                envOr("PORT", "8088"),
-		TargetHost:          targetHost,
-		TargetUser:          targetUser,
-		TargetSSHPort:       targetSSHPort,
-		WinTargetHost:       winTargetHost,
-		WinTargetUser:       winTargetUser,
-		WinSSHPort:          winSSHPort,
-		WinAGYBin:           winAGYBin,
-		WinInboxDir:         winInboxDir,
-		WinOutboxDir:        winOutboxDir,
-		WolMAC:              wolMAC,
-		SSHKey:              envOr("SSH_KEY", "/root/.ssh/id_ed25519"),
-		OllamaURL:           envOr("OLLAMA_URL", "http://127.0.0.1:11434"),
-		TtydWSURL:           envOr("TTYD_WS_URL", "ws://127.0.0.1:7681/terminal/ws"),
-		WhisperURL:          whisperURL,
-		IDEBridgeDir:        bridgeDir,
-		IDEBridgeTimeoutSec: bridgeTimeout,
-		Dirs:                dirs,
-		Mods:                mods,
+		Mode:                   mode,
+		Port:                   envOr("PORT", "8088"),
+		TargetHost:             targetHost,
+		TargetUser:             targetUser,
+		TargetSSHPort:          targetSSHPort,
+		WinTargetHost:          winTargetHost,
+		WinTargetUser:          winTargetUser,
+		WinSSHPort:             winSSHPort,
+		WinAGYBin:              winAGYBin,
+		WinInboxDir:            winInboxDir,
+		WinOutboxDir:           winOutboxDir,
+		WolMAC:                 wolMAC,
+		SSHKey:                 envOr("SSH_KEY", "/root/.ssh/id_ed25519"),
+		OllamaURL:              envOr("OLLAMA_URL", "http://127.0.0.1:11434"),
+		TtydWSURL:              envOr("TTYD_WS_URL", "ws://127.0.0.1:7681/terminal/ws"),
+		WhisperURL:             whisperURL,
+		IDEBridgeDir:           bridgeDir,
+		IDEBridgeTimeoutSec:    bridgeTimeout,
+		WebhookSecret:          envOr("WEBHOOK_SECRET", ""),
+		EvolutionAPIURL:        strings.TrimRight(envOr("EVOLUTION_API_URL", "http://127.0.0.1:8085"), "/"),
+		EvolutionInstance:      envOr("EVOLUTION_INSTANCE", "sub-notifier"),
+		EvolutionAPIKey:        envOr("EVOLUTION_API_KEY", ""),
+		WhatsAppAllowedNumbers: splitCSV(envOr("WHATSAPP_ALLOWED_NUMBERS", "")),
+		WhatsAppWebhookSecret:  envOr("WHATSAPP_WEBHOOK_SECRET", ""),
+		DiscordBotToken:        envOr("DISCORD_BOT_TOKEN", ""),
+		DiscordAllowedUserIDs:  splitCSV(envOr("DISCORD_ALLOWED_USER_IDS", "")),
+		Dirs:                   dirs,
+		Mods:                   mods,
 	}
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

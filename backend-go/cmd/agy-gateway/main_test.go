@@ -568,3 +568,111 @@ func TestDuplicateUploadDeduplication(t *testing.T) {
 		}
 	}
 }
+
+func TestWebhooksAndBotBridgeEndpoints(t *testing.T) {
+	// Mock Evolution API to capture WhatsApp reply
+	var gotWANumber, gotWAText string
+	waCh := make(chan struct{}, 1)
+	evoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Number string `json:"number"`
+			Text   string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotWANumber = body.Number
+		gotWAText = body.Text
+		select {
+		case waCh <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer evoSrv.Close()
+
+	// Mock Ollama so Auto/Standalone executes deterministically
+	ollamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:8b"}]}`))
+		case "/api/chat":
+			_, _ = w.Write([]byte(`{"message":{"content":"Resposta do bot"},"done":true}` + "\n"))
+		}
+	}))
+	defer ollamaSrv.Close()
+
+	mux, _, _ := newTestServerWithEnv(t, map[string]string{
+		"OLLAMA_URL":               ollamaSrv.URL,
+		"ENABLE_WEBHOOKS":          "true",
+		"WEBHOOK_SECRET":           "siri-secret-123",
+		"ENABLE_WHATSAPP_BOT":      "true",
+		"EVOLUTION_API_URL":        evoSrv.URL,
+		"EVOLUTION_INSTANCE":       "sub-notifier",
+		"WHATSAPP_ALLOWED_NUMBERS": "558398677675",
+		"ENABLE_DISCORD_BOT":       "true",
+		"DISCORD_ALLOWED_USER_IDS": "605488871773437993",
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// 1. Webhook rejects missing/wrong token
+	unauthResp, _ := http.Post(ts.URL+"/api/webhook/prompt", "application/json", strings.NewReader(`{"prompt":"oi"}`))
+	_ = unauthResp.Body.Close()
+	if unauthResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing bearer token, got %d", unauthResp.StatusCode)
+	}
+
+	// 2. Webhook wait=true returns reply
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/webhook/prompt", strings.NewReader(`{"prompt":"ping","model":"ollama:qwen3:8b","wait":true}`))
+	req.Header.Set("Authorization", "Bearer siri-secret-123")
+	req.Header.Set("Content-Type", "application/json")
+	okResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var whBody map[string]any
+	_ = json.NewDecoder(okResp.Body).Decode(&whBody)
+	_ = okResp.Body.Close()
+	if okResp.StatusCode != http.StatusOK || whBody["reply"] != "Resposta do bot" {
+		t.Fatalf("unexpected webhook wait response: status=%d body=%+v", okResp.StatusCode, whBody)
+	}
+
+	// 3. WhatsApp ignores group and accepts allowed DM
+	grpResp, _ := http.Post(ts.URL+"/api/bot/whatsapp/webhook", "application/json", strings.NewReader(`{"data":{"key":{"remoteJid":"120363@g.us","fromMe":false},"message":{"conversation":"oi"}}}`))
+	var grpBody map[string]any
+	_ = json.NewDecoder(grpResp.Body).Decode(&grpBody)
+	_ = grpResp.Body.Close()
+	if grpBody["ignored"] != true {
+		t.Fatalf("expected group whatsapp message to be ignored, got %+v", grpBody)
+	}
+
+	waResp, _ := http.Post(ts.URL+"/api/bot/whatsapp/webhook", "application/json", strings.NewReader(`{"data":{"key":{"remoteJid":"558398677675@s.whatsapp.net","fromMe":false},"message":{"conversation":"resuma"}}}`))
+	_ = waResp.Body.Close()
+	if waResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on allowed whatsapp webhook, got %d", waResp.StatusCode)
+	}
+	select {
+	case <-waCh:
+		if gotWANumber != "558398677675" || gotWAText == "" {
+			t.Fatalf("unexpected whatsapp reply: number=%q text=%q", gotWANumber, gotWAText)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Evolution API reply")
+	}
+
+	// 4. Discord rejects non-DM and accepts allowlisted DM
+	dReqBad, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/bot/discord/dm", strings.NewReader(`{"user_id":"605488871773437993","is_dm":false,"prompt":"oi"}`))
+	dReqBad.Header.Set("Authorization", "Bearer siri-secret-123")
+	dRespBad, _ := http.DefaultClient.Do(dReqBad)
+	_ = dRespBad.Body.Close()
+	if dRespBad.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-DM discord, got %d", dRespBad.StatusCode)
+	}
+
+	dReqOk, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/bot/discord/dm", strings.NewReader(`{"user_id":"605488871773437993","is_dm":true,"prompt":"oi","wait":true}`))
+	dReqOk.Header.Set("Authorization", "Bearer siri-secret-123")
+	dRespOk, _ := http.DefaultClient.Do(dReqOk)
+	_ = dRespOk.Body.Close()
+	if dRespOk.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for allowlisted discord DM, got %d", dRespOk.StatusCode)
+	}
+}
