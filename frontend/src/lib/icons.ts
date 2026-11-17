@@ -30,7 +30,14 @@ export type IconName =
   | 'sun'
   | 'moon'
   | 'palette'
-  | 'sparkles';
+  | 'sparkles'
+  | 'pin'
+  | 'edit'
+  | 'share'
+  | 'columns'
+  | 'compare'
+  | 'tag'
+  | 'link';
 
 export interface IconShape {
   tag: 'path' | 'circle' | 'rect' | 'line' | 'polyline' | 'polygon';
@@ -181,6 +188,40 @@ const ICONS: Record<IconName, IconShape[]> = {
   sparkles: [
     { tag: 'path', attrs: { d: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z' } },
     { tag: 'path', attrs: { d: 'M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z' } },
+  ],
+  pin: [
+    { tag: 'path', attrs: { d: 'M12 17v5' } },
+    { tag: 'path', attrs: { d: 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z' } },
+  ],
+  edit: [
+    { tag: 'path', attrs: { d: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7' } },
+    { tag: 'path', attrs: { d: 'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z' } },
+  ],
+  share: [
+    { tag: 'circle', attrs: { cx: 18, cy: 5, r: 3 } },
+    { tag: 'circle', attrs: { cx: 6, cy: 12, r: 3 } },
+    { tag: 'circle', attrs: { cx: 18, cy: 19, r: 3 } },
+    { tag: 'line', attrs: { x1: 8.59, y1: 13.51, x2: 15.42, y2: 17.49 } },
+    { tag: 'line', attrs: { x1: 15.41, y1: 6.51, x2: 8.59, y2: 10.49 } },
+  ],
+  columns: [
+    { tag: 'rect', attrs: { x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2 } },
+    { tag: 'line', attrs: { x1: 12, y1: 3, x2: 12, y2: 21 } },
+  ],
+  compare: [
+    { tag: 'polyline', attrs: { points: '16 3 21 3 21 8' } },
+    { tag: 'line', attrs: { x1: 4, y1: 20, x2: 21, y2: 3 } },
+    { tag: 'polyline', attrs: { points: '21 16 21 21 16 21' } },
+    { tag: 'line', attrs: { x1: 15, y1: 15, x2: 21, y2: 21 } },
+    { tag: 'line', attrs: { x1: 4, y1: 4, x2: 9, y2: 9 } },
+  ],
+  tag: [
+    { tag: 'path', attrs: { d: 'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z' } },
+    { tag: 'line', attrs: { x1: 7, y1: 7, x2: 7.01, y2: 7 } },
+  ],
+  link: [
+    { tag: 'path', attrs: { d: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' } },
+    { tag: 'path', attrs: { d: 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' } },
   ],
 };
 
