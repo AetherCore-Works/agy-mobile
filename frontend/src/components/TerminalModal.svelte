@@ -1,15 +1,18 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import Icon from './Icon.svelte';
+  import { getActiveAccentColor } from '../lib/theme';
 
   let {
     open = $bindable(false),
+    hostLabel = 'Terminal Local',
   }: {
     open: boolean;
+    hostLabel?: string;
   } = $props();
 
   let termContainer: HTMLDivElement | undefined = $state();
@@ -48,7 +51,7 @@
       theme: {
         background: '#09090b',
         foreground: '#e4e4e7',
-        cursor: '#38bdf8',
+        cursor: getActiveAccentColor(),
       },
       scrollback: 2000,
     });
@@ -69,8 +72,7 @@
 
     ws.onopen = () => {
       connected = true;
-      statusMsg = 'Conectado (Remote Terminal)';
-      // ttyd requires AuthToken JSON first (empty token when no auth)
+      statusMsg = `Conectado (${hostLabel})`;
       ws?.send(encoder.encode(JSON.stringify({ AuthToken: '', columns: term?.cols ?? 80, rows: term?.rows ?? 24 })));
       if (term) {
         fitAddon?.fit();
@@ -193,52 +195,55 @@
 
 {#if open}
   <div
-    transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
+    transition:fade={{ duration: 150 }}
     style="height: {modalHeight}; top: {modalTop};"
     class="fixed inset-x-0 bg-zinc-950 z-50 flex flex-col select-none"
   >
     <!-- Header -->
-    <div class="h-12 bg-zinc-900 border-b border-zinc-800 px-3 flex items-center justify-between shrink-0">
+    <div
+      transition:fly={{ y: -12, duration: 190, easing: cubicOut }}
+      class="h-12 bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] px-3 flex items-center justify-between shrink-0 theme-surface"
+    >
       <div class="flex items-center gap-2 min-w-0">
-        <span class="w-2 h-2 rounded-full {connected ? 'bg-emerald-500' : 'bg-amber-500'}"></span>
-        <span class="text-xs font-mono font-bold text-zinc-200 truncate">{statusMsg}</span>
+        <span class="w-2 h-2 rounded-full {connected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}"></span>
+        <span class="text-xs font-mono font-bold text-[var(--text-primary)] truncate">{statusMsg}</span>
       </div>
       <div class="flex items-center gap-2 shrink-0">
         <button
           type="button"
           onclick={connectTerminal}
           title="Reconectar"
-          class="p-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:text-zinc-100"
+          class="p-1.5 rounded-lg bg-[var(--bg-chip)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors active:scale-95"
         >
           <Icon name="refresh" size={16} />
         </button>
         <button
           type="button"
           onclick={() => (open = false)}
-          class="px-2.5 py-1 rounded-lg bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600/30 text-xs font-semibold"
+          class="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-400 border border-rose-500/30 hover:bg-rose-500/25 text-xs font-semibold transition-all active:scale-95"
         >
           Fechar
         </button>
       </div>
     </div>
 
-    <!-- Native xterm.js Canvas -->
+    <!-- Native xterm.js Canvas (always dark high-contrast) -->
     <div bind:this={termContainer} class="flex-1 min-h-0 w-full bg-zinc-950 p-1 overflow-hidden"></div>
 
     <!-- Mobile Quick Keys & Input Bar -->
-    <div class="bg-zinc-900/95 border-t border-zinc-800 p-2 flex flex-col gap-1.5 shrink-0">
+    <div class="bg-[var(--bg-surface)] border-t border-[var(--border-subtle)] p-2 flex flex-col gap-1.5 shrink-0 theme-surface">
       <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-        <button type="button" onclick={() => handleKey('ESC')} class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-mono border border-zinc-700 shrink-0">Esc</button>
-        <button type="button" onclick={() => handleKey('TAB')} class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-mono border border-zinc-700 shrink-0">Tab</button>
-        <button type="button" onclick={() => handleKey('CTRL_C')} class="px-2.5 py-1 rounded bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 text-[11px] font-mono border border-rose-800/60 shrink-0">Ctrl+C</button>
-        <button type="button" onclick={() => handleKey('UP')} class="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 shrink-0" aria-label="Cima">
+        <button type="button" onclick={() => handleKey('ESC')} class="px-2.5 py-1 rounded bg-[var(--bg-chip)] hover:bg-[var(--bg-chip-hover)] text-[var(--text-primary)] text-[11px] font-mono border border-[var(--border-strong)] shrink-0 transition-transform active:scale-95">Esc</button>
+        <button type="button" onclick={() => handleKey('TAB')} class="px-2.5 py-1 rounded bg-[var(--bg-chip)] hover:bg-[var(--bg-chip-hover)] text-[var(--text-primary)] text-[11px] font-mono border border-[var(--border-strong)] shrink-0 transition-transform active:scale-95">Tab</button>
+        <button type="button" onclick={() => handleKey('CTRL_C')} class="px-2.5 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 text-[11px] font-mono border border-rose-500/35 shrink-0 transition-transform active:scale-95">Ctrl+C</button>
+        <button type="button" onclick={() => handleKey('UP')} class="px-2 py-1 rounded bg-[var(--bg-chip)] hover:bg-[var(--bg-chip-hover)] text-[var(--text-primary)] border border-[var(--border-strong)] shrink-0 transition-transform active:scale-95" aria-label="Cima">
           <Icon name="chevron-up" size={14} />
         </button>
-        <button type="button" onclick={() => handleKey('DOWN')} class="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 shrink-0" aria-label="Baixo">
+        <button type="button" onclick={() => handleKey('DOWN')} class="px-2 py-1 rounded bg-[var(--bg-chip)] hover:bg-[var(--bg-chip-hover)] text-[var(--text-primary)] border border-[var(--border-strong)] shrink-0 transition-transform active:scale-95" aria-label="Baixo">
           <Icon name="chevron-down" size={14} />
         </button>
-        <button type="button" onclick={() => insertText('sudo ')} class="px-2.5 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 text-[11px] font-mono border border-emerald-800/60 shrink-0">sudo</button>
-        <button type="button" onclick={pasteClipboard} class="px-2.5 py-1 rounded bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 text-[11px] font-mono border border-sky-500/40 shrink-0 flex items-center gap-1">
+        <button type="button" onclick={() => insertText('sudo ')} class="px-2.5 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-500 text-[11px] font-mono border border-emerald-500/35 shrink-0 transition-transform active:scale-95">sudo</button>
+        <button type="button" onclick={pasteClipboard} class="px-2.5 py-1 rounded bg-[var(--accent-soft)] hover:opacity-90 text-[var(--accent-fg)] text-[11px] font-mono border border-[var(--accent-border)] shrink-0 flex items-center gap-1 transition-transform active:scale-95">
           <Icon name="clipboard" size={12} />
           <span>Colar</span>
         </button>
@@ -248,7 +253,7 @@
           type="text"
           bind:value={termInputVal}
           placeholder="Comando rápido / colar texto..."
-          class="flex-1 bg-zinc-950 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-sky-500"
+          class="flex-1 bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)]"
           onkeydown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -259,7 +264,7 @@
         <button
           type="button"
           onclick={submitInput}
-          class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-semibold shrink-0"
+          class="px-3 py-1.5 rounded-lg bg-[var(--accent-solid)] hover:bg-[var(--accent-hover)] text-[var(--accent-on-solid)] text-xs font-mono font-semibold shrink-0 transition-all active:scale-95"
         >
           Enviar
         </button>

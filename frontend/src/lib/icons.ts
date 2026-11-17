@@ -26,7 +26,11 @@ export type IconName =
   | 'alert'
   | 'file'
   | 'clock'
-  | 'stop';
+  | 'stop'
+  | 'sun'
+  | 'moon'
+  | 'palette'
+  | 'sparkles';
 
 export interface IconShape {
   tag: 'path' | 'circle' | 'rect' | 'line' | 'polyline' | 'polygon';
@@ -152,6 +156,31 @@ const ICONS: Record<IconName, IconShape[]> = {
   ],
   stop: [
     { tag: 'rect', attrs: { x: 6, y: 6, width: 12, height: 12, rx: 2, ry: 2 } },
+  ],
+  sun: [
+    { tag: 'circle', attrs: { cx: 12, cy: 12, r: 4 } },
+    { tag: 'line', attrs: { x1: 12, y1: 2, x2: 12, y2: 4 } },
+    { tag: 'line', attrs: { x1: 12, y1: 20, x2: 12, y2: 22 } },
+    { tag: 'line', attrs: { x1: 4.93, y1: 4.93, x2: 6.34, y2: 6.34 } },
+    { tag: 'line', attrs: { x1: 17.66, y1: 17.66, x2: 19.07, y2: 19.07 } },
+    { tag: 'line', attrs: { x1: 2, y1: 12, x2: 4, y2: 12 } },
+    { tag: 'line', attrs: { x1: 20, y1: 12, x2: 22, y2: 12 } },
+    { tag: 'line', attrs: { x1: 6.34, y1: 17.66, x2: 4.93, y2: 19.07 } },
+    { tag: 'line', attrs: { x1: 19.07, y1: 4.93, x2: 17.66, y2: 6.34 } },
+  ],
+  moon: [
+    { tag: 'path', attrs: { d: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' } },
+  ],
+  palette: [
+    { tag: 'path', attrs: { d: 'M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z' } },
+    { tag: 'circle', attrs: { cx: 13.5, cy: 6.5, r: 0.9 } },
+    { tag: 'circle', attrs: { cx: 17.5, cy: 10.5, r: 0.9 } },
+    { tag: 'circle', attrs: { cx: 8.5, cy: 7.5, r: 0.9 } },
+    { tag: 'circle', attrs: { cx: 6.5, cy: 12.5, r: 0.9 } },
+  ],
+  sparkles: [
+    { tag: 'path', attrs: { d: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z' } },
+    { tag: 'path', attrs: { d: 'M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z' } },
   ],
 };
 

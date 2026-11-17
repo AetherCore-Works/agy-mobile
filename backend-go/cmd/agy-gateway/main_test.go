@@ -66,14 +66,24 @@ func TestHealthFeaturesStatusModelsAndSettings(t *testing.T) {
 
 	// Update settings + validation
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewBufferString(`{"default_permission_mode":"autonomous","default_model":"auto"}`)))
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewBufferString(`{"default_permission_mode":"autonomous","default_model":"auto","theme_mode":"light","theme_palette":"emerald"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT /api/settings expected 200, got %d", rec.Code)
+	}
+	var updatedSettings map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &updatedSettings)
+	if updatedSettings["theme_mode"] != "light" || updatedSettings["theme_palette"] != "emerald" {
+		t.Fatalf("expected persisted theme settings, got %+v", updatedSettings)
 	}
 	badRec := httptest.NewRecorder()
 	mux.ServeHTTP(badRec, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewBufferString(`{"default_permission_mode":"invalid"}`)))
 	if badRec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid permission mode, got %d", badRec.Code)
+	}
+	badThemeRec := httptest.NewRecorder()
+	mux.ServeHTTP(badThemeRec, httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewBufferString(`{"theme_palette":"neon"}`)))
+	if badThemeRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid theme palette, got %d", badThemeRec.Code)
 	}
 }
 
