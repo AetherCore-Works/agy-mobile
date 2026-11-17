@@ -50,3 +50,14 @@ func TestAllowlists(t *testing.T) {
 		t.Fatal("must allow configured discord user in DM")
 	}
 }
+
+func TestFormattingAndChunking(t *testing.T) {
+	wa := FormatForWhatsApp("## Status\nTudo **online** no servidor.")
+	if wa != "*Status*\nTudo *online* no servidor." {
+		t.Fatalf("unexpected WhatsApp formatting: %q", wa)
+	}
+	chunks := SplitChunks("linha1\nlinha2\nlinha3", 12)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multi-chunk split, got %v", chunks)
+	}
+}

@@ -369,7 +369,7 @@
     const syncViewport = () => {
       if (!shellEl) return;
       const vv = window.visualViewport;
-      if (vv) {
+      if (vv && vv.height < window.innerHeight - 80) {
         shellEl.style.height = `${vv.height}px`;
         shellEl.style.top = `${vv.offsetTop}px`;
       } else {

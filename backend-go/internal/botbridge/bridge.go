@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -171,32 +172,75 @@ func (b *Bridge) WaitForJobResult(ctx context.Context, jobID string, timeout tim
 	}
 }
 
-// SendWhatsAppText sends a plain text message via Evolution API v2.
+var (
+	reHeadingLine = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	reBoldMD      = regexp.MustCompile(`\*\*(.+?)\*\*`)
+)
+
+// FormatForWhatsApp converts standard Markdown into clean WhatsApp-friendly formatting.
+func FormatForWhatsApp(md string) string {
+	out := strings.TrimSpace(md)
+	out = reHeadingLine.ReplaceAllString(out, "*$1*")
+	out = reBoldMD.ReplaceAllString(out, "*$1*")
+	return out
+}
+
+// SplitChunks splits long messages cleanly on line boundaries up to maxLen runes.
+func SplitChunks(text string, maxLen int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if maxLen <= 0 || len([]rune(text)) <= maxLen {
+		return []string{text}
+	}
+	var chunks []string
+	var cur strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		if cur.Len() > 0 && len([]rune(cur.String()))+1+len([]rune(line)) > maxLen {
+			chunks = append(chunks, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		}
+		if cur.Len() > 0 {
+			cur.WriteByte('\n')
+		}
+		cur.WriteString(line)
+	}
+	if cur.Len() > 0 {
+		chunks = append(chunks, strings.TrimSpace(cur.String()))
+	}
+	return chunks
+}
+
+// SendWhatsAppText sends a formatted text message via Evolution API v2 (chunked at 3500 chars).
 func (b *Bridge) SendWhatsAppText(ctx context.Context, number, text string) error {
 	if b.Cfg.EvolutionAPIURL == "" || b.Cfg.EvolutionInstance == "" {
 		return fmt.Errorf("evolution api not configured")
 	}
 	endpoint := fmt.Sprintf("%s/message/sendText/%s", b.Cfg.EvolutionAPIURL, b.Cfg.EvolutionInstance)
-	payload, _ := json.Marshal(map[string]any{
-		"number": number,
-		"text":   text,
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if b.Cfg.EvolutionAPIKey != "" {
-		req.Header.Set("apikey", b.Cfg.EvolutionAPIKey)
-	}
-	resp, err := b.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("evolution api status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	for _, chunk := range SplitChunks(FormatForWhatsApp(text), 3500) {
+		payload, _ := json.Marshal(map[string]any{
+			"number": number,
+			"text":   chunk,
+		})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if b.Cfg.EvolutionAPIKey != "" {
+			req.Header.Set("apikey", b.Cfg.EvolutionAPIKey)
+		}
+		resp, err := b.HTTP.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode >= 400 {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
+			return fmt.Errorf("evolution api status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -229,24 +273,24 @@ func (b *Bridge) SendDiscordDM(ctx context.Context, userID, text string) error {
 		return fmt.Errorf("invalid discord dm channel response")
 	}
 
-	if len(text) > 1900 {
-		text = text[:1900] + "\n…"
-	}
-	msgBody, _ := json.Marshal(map[string]string{"content": text})
-	msgReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", ch.ID), bytes.NewReader(msgBody))
-	if err != nil {
-		return err
-	}
-	msgReq.Header.Set("Content-Type", "application/json")
-	msgReq.Header.Set("Authorization", "Bot "+b.Cfg.DiscordBotToken)
-	msgResp, err := b.HTTP.Do(msgReq)
-	if err != nil {
-		return err
-	}
-	defer msgResp.Body.Close()
-	if msgResp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(msgResp.Body, 512))
-		return fmt.Errorf("discord send error %d: %s", msgResp.StatusCode, strings.TrimSpace(string(raw)))
+	for _, chunk := range SplitChunks(text, 1900) {
+		msgBody, _ := json.Marshal(map[string]string{"content": chunk})
+		msgReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", ch.ID), bytes.NewReader(msgBody))
+		if err != nil {
+			return err
+		}
+		msgReq.Header.Set("Content-Type", "application/json")
+		msgReq.Header.Set("Authorization", "Bot "+b.Cfg.DiscordBotToken)
+		msgResp, err := b.HTTP.Do(msgReq)
+		if err != nil {
+			return err
+		}
+		if msgResp.StatusCode >= 400 {
+			raw, _ := io.ReadAll(io.LimitReader(msgResp.Body, 512))
+			_ = msgResp.Body.Close()
+			return fmt.Errorf("discord send error %d: %s", msgResp.StatusCode, strings.TrimSpace(string(raw)))
+		}
+		_ = msgResp.Body.Close()
 	}
 	return nil
 }
