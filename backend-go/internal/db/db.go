@@ -500,6 +500,8 @@ func (g *GatewayDB) GetSettings() (map[string]any, error) {
 		"default_permission_mode": "copilot",
 		"default_model":           "gemini-4-hydrogen-high",
 		"default_effort":          "",
+		"theme_mode":              "dark",
+		"theme_palette":           "sky",
 	}
 
 	g.mu.Lock()
