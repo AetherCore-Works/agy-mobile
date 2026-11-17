@@ -29,6 +29,7 @@
     settings = $bindable<GatewaySettings>(),
     onSelectConversation,
     onNewConversation,
+    onConversationDeleted,
     onSettingsSaved,
     onThemeChange,
   }: {
@@ -42,6 +43,7 @@
     settings: GatewaySettings;
     onSelectConversation: (id: string, title?: string) => void;
     onNewConversation: () => void;
+    onConversationDeleted?: (id: string) => void;
     onSettingsSaved: (s: GatewaySettings) => void;
     onThemeChange: (mode: ThemeMode, palette: ThemePalette) => void;
   } = $props();
@@ -66,6 +68,9 @@
   let editTag = $state('');
   let editTagColor = $state('');
   let savingMeta = $state(false);
+  let confirmDeleteId = $state<string | null>(null);
+  let deletingId = $state<string | null>(null);
+  let deleteError = $state('');
 
   const PAGE_SIZE = 30;
 
@@ -117,6 +122,8 @@
 
   function startEdit(e: MouseEvent, c: ConversationSummary) {
     e.stopPropagation();
+    confirmDeleteId = null;
+    deleteError = '';
     if (editingId === c.id) {
       editingId = null;
       return;
@@ -143,10 +150,28 @@
     }
   }
 
-  async function handleDelete(e: MouseEvent, id: string) {
+  function requestDelete(e: MouseEvent, id: string) {
     e.stopPropagation();
-    await deleteConversation(id);
-    await load(true);
+    editingId = null;
+    deleteError = '';
+    confirmDeleteId = confirmDeleteId === id ? null : id;
+  }
+
+  async function confirmDelete(e: MouseEvent, id: string) {
+    e.stopPropagation();
+    deletingId = id;
+    deleteError = '';
+    try {
+      await deleteConversation(id);
+      confirmDeleteId = null;
+      conversations = conversations.filter((c) => c.id !== id);
+      onConversationDeleted?.(id);
+      await load(true);
+    } catch (err: any) {
+      deleteError = err?.message || 'Falha ao apagar sessão';
+    } finally {
+      deletingId = null;
+    }
   }
 
   async function saveSettingsPatch(patch: Partial<GatewaySettings>) {
@@ -164,9 +189,14 @@
   }
 
   $effect(() => {
-    if (open && activeTab === 'chats') {
+    if (!open) {
+      confirmDeleteId = null;
+      deleteError = '';
+      return;
+    }
+    if (activeTab === 'chats') {
       load(true);
-    } else if (open && activeTab === 'settings') {
+    } else if (activeTab === 'settings') {
       if (watchdogEnabled) {
         fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
       }
@@ -363,18 +393,51 @@
                   >
                     <Icon name="edit" size={13} />
                   </button>
-                  {#if c.engine === 'ollama'}
+                  {#if c.engine === 'ollama' || c.engine === 'agy'}
                     <button
                       type="button"
-                      onclick={(e) => handleDelete(e, c.id)}
-                      class="p-1 rounded text-[var(--text-faint)] hover:text-rose-400 transition-colors"
-                      title="Excluir"
+                      onclick={(e) => requestDelete(e, c.id)}
+                      class="p-1 rounded transition-colors {confirmDeleteId === c.id ? 'text-rose-400 bg-rose-500/15' : 'text-[var(--text-faint)] hover:text-rose-400'}"
+                      title="Apagar chat"
                     >
                       <Icon name="trash" size={13} />
                     </button>
                   {/if}
                 </div>
               </div>
+
+              {#if confirmDeleteId === c.id}
+                <div class="px-2.5 pb-2.5 pt-1.5 border-t border-rose-500/30 bg-rose-500/5 space-y-2 rounded-b-xl">
+                  <div class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                    Apagar este chat permanentemente?
+                  </div>
+                  {#if deleteError}
+                    <div class="text-[11px] text-rose-400">{deleteError}</div>
+                  {/if}
+                  <div class="flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      disabled={deletingId === c.id}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        confirmDeleteId = null;
+                        deleteError = '';
+                      }}
+                      class="px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingId === c.id}
+                      onclick={(e) => confirmDelete(e, c.id)}
+                      class="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-[11px] font-semibold transition-colors"
+                    >
+                      {deletingId === c.id ? 'Apagando...' : 'Apagar'}
+                    </button>
+                  </div>
+                </div>
+              {/if}
 
               {#if editingId === c.id}
                 <form

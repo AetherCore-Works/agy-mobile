@@ -101,6 +101,7 @@ type Runner interface {
 	ListOllamaModels(ctx context.Context) []ModelInfo
 	ListAGYConversations(ctx context.Context, limit int) ([]ConversationSummary, error)
 	GetAGYConversation(ctx context.Context, convID string) (*ConversationDetail, error)
+	DeleteAGYConversation(ctx context.Context, convID string) (bool, error)
 	SaveToInbox(ctx context.Context, localTmpPath, cleanName string) (string, error)
 	ListOutbox(ctx context.Context) ([]OutboxFile, error)
 	OpenOutboxFile(ctx context.Context, filename string) (io.ReadCloser, func() error, error)
@@ -118,6 +119,14 @@ func Create(cfg config.GatewaySettings) Runner {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func validateConversationID(convID string) (string, error) {
+	clean := strings.TrimSpace(convID)
+	if clean == "" || clean == "." || clean == ".." || strings.ContainsAny(clean, `/\`) || filepath.Base(clean) != clean {
+		return "", fmt.Errorf("invalid conversation id")
+	}
+	return clean, nil
 }
 
 // ResolveAGYBinary finds the agy CLI executable via AGY_BIN env, PATH, or default install dir.
@@ -384,6 +393,32 @@ func (r *LocalRunner) GetAGYConversation(_ context.Context, convID string) (*Con
 	}, nil
 }
 
+func (r *LocalRunner) DeleteAGYConversation(_ context.Context, convID string) (bool, error) {
+	clean, err := validateConversationID(convID)
+	if err != nil {
+		return false, err
+	}
+	brain := filepath.Clean(r.brainDir())
+	target := filepath.Join(brain, clean)
+	if filepath.Dir(target) != brain {
+		return false, fmt.Errorf("invalid conversation path")
+	}
+	info, err := os.Stat(target)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("invalid conversation target")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // --- SSHRunner (Gateway Mode: Pi -> Workstation) ---
 
 // SSHRunner executes AGY CLI, Ollama, and session sync remotely over SSH.
@@ -523,4 +558,20 @@ func (r *SSHRunner) GetAGYConversation(ctx context.Context, convID string) (*Con
 	}
 	detail.Engine = "agy"
 	return &detail, nil
+}
+
+func (r *SSHRunner) DeleteAGYConversation(ctx context.Context, convID string) (bool, error) {
+	clean, err := validateConversationID(convID)
+	if err != nil {
+		return false, err
+	}
+	pyCmd := fmt.Sprintf(
+		`python3 -c 'import os,shutil,sys; bid=sys.argv[1]; b=os.environ.get("AGY_BRAIN_DIR") or os.path.expanduser("~/.gemini/antigravity-cli/brain"); p=os.path.join(b, bid); exists=os.path.isdir(p); shutil.rmtree(p) if exists else None; print("1" if exists else "0")' %s`,
+		shellQuote(clean),
+	)
+	out, err := r.runSSH(ctx, pyCmd, 5*time.Second)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "1", nil
 }
