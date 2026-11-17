@@ -14,6 +14,17 @@ export interface ConversationSummary {
   engine: 'agy' | 'ollama';
   model?: string;
   message_count?: number;
+  pinned?: boolean;
+  tag?: string;
+  tag_color?: string;
+  custom_title?: string;
+}
+
+export interface ConversationMetaPatch {
+  pinned?: boolean;
+  custom_title?: string;
+  tag?: string;
+  tag_color?: string;
 }
 
 export interface ChatMessage {
@@ -103,19 +114,60 @@ export async function updateSettings(patch: Partial<GatewaySettings>): Promise<G
 export async function fetchConversations(
   q = '',
   limit = 40,
-  offset = 0
-): Promise<{ conversations: ConversationSummary[]; total: number; has_more: boolean }> {
+  offset = 0,
+  engine: '' | 'agy' | 'ollama' = '',
+  tag = ''
+): Promise<{ conversations: ConversationSummary[]; total: number; has_more: boolean; tags?: string[] }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (q.trim()) params.set('q', q.trim());
+  if (engine) params.set('engine', engine);
+  if (tag.trim()) params.set('tag', tag.trim());
   const res = await fetch(`/api/conversations?${params}`);
   return res.json();
 }
 
 export async function fetchConversation(
   id: string
-): Promise<{ id: string; messages: ChatMessage[]; active_job_id?: string | null; engine?: string }> {
+): Promise<{
+  id: string;
+  title?: string;
+  messages: ChatMessage[];
+  active_job_id?: string | null;
+  engine?: string;
+  pinned?: boolean;
+  tag?: string;
+  tag_color?: string;
+}> {
   const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error('Conversa não encontrada');
+  return res.json();
+}
+
+export async function updateConversationMeta(
+  id: string,
+  patch: ConversationMetaPatch
+): Promise<{ conv_id: string; pinned: boolean; custom_title: string; tag: string; tag_color: string }> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/meta`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error('Falha ao atualizar sessão');
+  return res.json();
+}
+
+export async function createSnapshot(payload: {
+  title: string;
+  content_md: string;
+  theme_mode: 'dark' | 'light';
+  theme_palette: string;
+}): Promise<{ id: string; url: string; created_at: string }> {
+  const res = await fetch('/api/snapshots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Falha ao criar link de snapshot');
   return res.json();
 }
 
