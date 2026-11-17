@@ -47,10 +47,26 @@ var defaultAGYModels = []runner.ModelInfo{
 	{ID: "gpt-oss-120b-medium", Name: "GPT-OSS 120B (Medium)", Type: "cloud", Badge: "Open"},
 }
 
+var validThemeModes = map[string]bool{
+	"dark":  true,
+	"light": true,
+}
+
+var validThemePalettes = map[string]bool{
+	"sky":     true,
+	"emerald": true,
+	"violet":  true,
+	"indigo":  true,
+	"amber":   true,
+	"rose":    true,
+}
+
 type settingsUpdateRequest struct {
 	DefaultPermissionMode *string `json:"default_permission_mode"`
 	DefaultModel          *string `json:"default_model"`
 	DefaultEffort         *string `json:"default_effort"`
+	ThemeMode             *string `json:"theme_mode"`
+	ThemePalette          *string `json:"theme_palette"`
 }
 
 type wolRequest struct {
@@ -264,6 +280,20 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		}
 		if body.DefaultEffort != nil {
 			patch["default_effort"] = *body.DefaultEffort
+		}
+		if body.ThemeMode != nil {
+			if !validThemeModes[*body.ThemeMode] {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Modo de tema inválido"})
+				return
+			}
+			patch["theme_mode"] = *body.ThemeMode
+		}
+		if body.ThemePalette != nil {
+			if !validThemePalettes[*body.ThemePalette] {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Paleta de cor inválida"})
+				return
+			}
+			patch["theme_palette"] = *body.ThemePalette
 		}
 		updated, err := store.UpdateSettings(patch)
 		if err != nil {
