@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
@@ -37,7 +38,8 @@
   }
 
   $effect(() => {
-    if (open) refresh();
+    const isOpen = open;
+    if (isOpen) untrack(() => refresh());
   });
 </script>
 

@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
@@ -96,8 +99,10 @@ type TelemetryData struct {
 // Runner abstracts local (standalone) vs SSH (gateway) execution.
 type Runner interface {
 	CheckOnline(ctx context.Context, timeout time.Duration) bool
+	ActiveOS(ctx context.Context) string
 	StartAGYProcess(ctx context.Context, args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error)
 	OpenOllamaChat(ctx context.Context, payload []byte) (io.ReadCloser, func() error, error)
+	ListAGYModels(ctx context.Context) []ModelInfo
 	ListOllamaModels(ctx context.Context) []ModelInfo
 	ListAGYConversations(ctx context.Context, limit int) ([]ConversationSummary, error)
 	GetAGYConversation(ctx context.Context, convID string) (*ConversationDetail, error)
@@ -175,6 +180,10 @@ func (r *LocalRunner) CheckOnline(_ context.Context, _ time.Duration) bool {
 	return true
 }
 
+func (r *LocalRunner) ActiveOS(_ context.Context) string {
+	return runtime.GOOS
+}
+
 func (r *LocalRunner) StartAGYProcess(ctx context.Context, args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
 	bin := ResolveAGYBinary()
 	binArgs := append([]string{}, args...)
@@ -229,6 +238,73 @@ func (r *LocalRunner) OpenOllamaChat(ctx context.Context, payload []byte) (io.Re
 		return nil, nil, fmt.Errorf("Ollama HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return resp.Body, resp.Body.Close, nil
+}
+
+// ParseAGYModelsOutput parses `agy models` stdout into ModelInfo entries.
+func ParseAGYModelsOutput(raw string) []ModelInfo {
+	normalized := strings.ReplaceAll(raw, "\r", "\n")
+	var out []ModelInfo
+	seen := map[string]bool{}
+	for _, line := range strings.Split(normalized, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Contains(line, "Fetching available models") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		id := fields[0]
+		if !strings.Contains(id, "-") || seen[id] {
+			continue
+		}
+		seen[id] = true
+		name := strings.TrimSpace(line[len(id):])
+		if name == "" {
+			name = id
+		}
+		out = append(out, ModelInfo{
+			ID:    id,
+			Name:  name,
+			Type:  "cloud",
+			Badge: deriveAGYModelBadge(id),
+		})
+	}
+	return out
+}
+
+func deriveAGYModelBadge(id string) string {
+	low := strings.ToLower(id)
+	switch {
+	case strings.Contains(low, "xhigh"):
+		return "Extra"
+	case strings.Contains(low, "hydrogen"):
+		return "Hydrogen"
+	case strings.Contains(low, "argon") || strings.Contains(low, "orchestrator"):
+		return "Raciocínio"
+	case strings.Contains(low, "flash"):
+		return "Rápido"
+	case strings.Contains(low, "opus"):
+		return "Top"
+	case strings.Contains(low, "sonnet"):
+		return "Engenharia"
+	case strings.Contains(low, "gpt-oss"):
+		return "Open"
+	default:
+		return "Cloud"
+	}
+}
+
+func (r *LocalRunner) ListAGYModels(ctx context.Context) []ModelInfo {
+	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, ResolveAGYBinary(), "models")
+	configureOSProcess(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	return ParseAGYModelsOutput(string(out))
 }
 
 func (r *LocalRunner) ListOllamaModels(ctx context.Context) []ModelInfo {
@@ -346,7 +422,11 @@ func (r *LocalRunner) ListAGYConversations(_ context.Context, limit int) ([]Conv
 
 func (r *LocalRunner) GetAGYConversation(_ context.Context, convID string) (*ConversationDetail, error) {
 	brain := r.brainDir()
-	transcript := filepath.Join(brain, convID, ".system_generated", "logs", "transcript.jsonl")
+	logsDir := filepath.Join(brain, convID, ".system_generated", "logs")
+	transcript := filepath.Join(logsDir, "transcript_full.jsonl")
+	if _, err := os.Stat(transcript); err != nil {
+		transcript = filepath.Join(logsDir, "transcript.jsonl")
+	}
 	f, err := os.Open(transcript)
 	if err != nil {
 		return nil, nil
@@ -413,35 +493,209 @@ func (r *LocalRunner) DeleteAGYConversation(_ context.Context, convID string) (b
 	if !info.IsDir() {
 		return false, fmt.Errorf("invalid conversation target")
 	}
+	if err := backupDirTarGz(brain, clean, target); err != nil {
+		return false, fmt.Errorf("backup before delete failed: %w", err)
+	}
 	if err := os.RemoveAll(target); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
+func backupDirTarGz(brainDir, convID, targetDir string) error {
+	backupDir := filepath.Join(filepath.Dir(brainDir), "brain-backups")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return err
+	}
+	archivePath := filepath.Join(backupDir, fmt.Sprintf("%s_%s.tar.gz", convID, time.Now().Format("20060102-150405")))
+	out, err := os.Create(archivePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	gz := gzip.NewWriter(out)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	return filepath.Walk(targetDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(filepath.Dir(targetDir), path)
+		if err != nil {
+			return err
+		}
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(tw, f)
+			_ = f.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+		}
+		return nil
+	})
+}
+
 // --- SSHRunner (Gateway Mode: Pi -> Workstation) ---
 
 // SSHRunner executes AGY CLI, Ollama, and session sync remotely over SSH.
+// When WIN_TARGET_USER is configured, it automatically detects whether the host is booted into Linux or Windows.
 type SSHRunner struct {
 	cfg config.GatewaySettings
+
+	targetMu       sync.RWMutex
+	cachedOS       string
+	cachedAt       time.Time
+	cachedOnline   bool
+	cachedOnlineAt time.Time
 }
 
-func (r *SSHRunner) sshBaseArgs(connectTimeoutSec int) []string {
+type sshTarget struct {
+	osName    string
+	host      string
+	user      string
+	port      string
+	agyBin    string
+	inboxDir  string
+	outboxDir string
+}
+
+func (r *SSHRunner) linuxTarget() sshTarget {
+	port := r.cfg.TargetSSHPort
+	if port == "" {
+		port = "22"
+	}
+	return sshTarget{
+		osName:    "linux",
+		host:      r.cfg.TargetHost,
+		user:      r.cfg.TargetUser,
+		port:      port,
+		agyBin:    ResolveAGYBinary(),
+		inboxDir:  r.cfg.Dirs.InboxDir,
+		outboxDir: r.cfg.Dirs.OutboxDir,
+	}
+}
+
+func (r *SSHRunner) windowsTarget() sshTarget {
+	port := r.cfg.WinSSHPort
+	if port == "" {
+		port = "22"
+	}
+	agyBin := r.cfg.WinAGYBin
+	if agyBin == "" {
+		agyBin = "agy"
+	}
+	inbox := r.cfg.WinInboxDir
+	if inbox == "" {
+		inbox = fmt.Sprintf("C:/Users/%s/Documents/AGY-Gateway/inbox", r.cfg.WinTargetUser)
+	}
+	outbox := r.cfg.WinOutboxDir
+	if outbox == "" {
+		outbox = fmt.Sprintf("C:/Users/%s/Documents/AGY-Gateway/outbox", r.cfg.WinTargetUser)
+	}
+	return sshTarget{
+		osName:    "windows",
+		host:      r.cfg.WinTargetHost,
+		user:      r.cfg.WinTargetUser,
+		port:      port,
+		agyBin:    agyBin,
+		inboxDir:  inbox,
+		outboxDir: outbox,
+	}
+}
+
+func (r *SSHRunner) hasDualBoot() bool {
+	return r.cfg.WinTargetUser != "" && r.cfg.WinTargetHost != ""
+}
+
+func (r *SSHRunner) sshBaseArgsFor(t sshTarget, connectTimeoutSec int) []string {
+	if connectTimeoutSec <= 0 {
+		connectTimeoutSec = 3
+	}
 	return []string{
 		"ssh",
 		"-i", r.cfg.SSHKey,
+		"-p", t.port,
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "BatchMode=yes",
 		"-o", fmt.Sprintf("ConnectTimeout=%d", connectTimeoutSec),
-		fmt.Sprintf("%s@%s", r.cfg.TargetUser, r.cfg.TargetHost),
+		fmt.Sprintf("%s@%s", t.user, t.host),
 	}
+}
+
+func (r *SSHRunner) probeSSH(ctx context.Context, t sshTarget, cmdStr string) bool {
+	cctx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+	defer cancel()
+	args := append(r.sshBaseArgsFor(t, 2), cmdStr)
+	cmd := exec.CommandContext(cctx, args[0], args[1:]...)
+	return cmd.Run() == nil
+}
+
+func (r *SSHRunner) resolveTarget(ctx context.Context) sshTarget {
+	if !r.hasDualBoot() {
+		return r.linuxTarget()
+	}
+
+	r.targetMu.RLock()
+	cached := r.cachedOS
+	fresh := time.Since(r.cachedAt) < 15*time.Second
+	r.targetMu.RUnlock()
+	if fresh && cached != "" {
+		if cached == "windows" {
+			return r.windowsTarget()
+		}
+		return r.linuxTarget()
+	}
+
+	lt := r.linuxTarget()
+	wt := r.windowsTarget()
+
+	detected := "linux"
+	if r.probeSSH(ctx, lt, "uname -s") {
+		detected = "linux"
+	} else if r.probeSSH(ctx, wt, "cmd /c echo ok") {
+		detected = "windows"
+	}
+
+	r.targetMu.Lock()
+	r.cachedOS = detected
+	r.cachedAt = time.Now()
+	r.targetMu.Unlock()
+
+	if detected == "windows" {
+		return wt
+	}
+	return lt
+}
+
+func (r *SSHRunner) ActiveOS(ctx context.Context) string {
+	return r.resolveTarget(ctx).osName
+}
+
+func (r *SSHRunner) sshBaseArgs(connectTimeoutSec int) []string {
+	return r.sshBaseArgsFor(r.resolveTarget(context.Background()), connectTimeoutSec)
 }
 
 func (r *SSHRunner) runSSH(ctx context.Context, remoteCmd string, timeout time.Duration) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	args := append(r.sshBaseArgs(int(timeout.Seconds())), remoteCmd)
+	t := r.resolveTarget(cctx)
+	args := append(r.sshBaseArgsFor(t, int(timeout.Seconds())), remoteCmd)
 	cmd := exec.CommandContext(cctx, args[0], args[1:]...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -450,21 +704,54 @@ func (r *SSHRunner) runSSH(ctx context.Context, remoteCmd string, timeout time.D
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (r *SSHRunner) CheckOnline(_ context.Context, timeout time.Duration) bool {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(r.cfg.TargetHost, "22"), timeout)
-	if err != nil {
-		return false
+func (r *SSHRunner) CheckOnline(ctx context.Context, timeout time.Duration) bool {
+	r.targetMu.RLock()
+	online := r.cachedOnline
+	fresh := !r.cachedOnlineAt.IsZero() && time.Since(r.cachedOnlineAt) < 8*time.Second
+	r.targetMu.RUnlock()
+	if fresh {
+		return online
 	}
-	_ = conn.Close()
-	return true
+
+	t := r.resolveTarget(ctx)
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(t.host, t.port), timeout)
+	isUp := err == nil
+	if err == nil {
+		_ = conn.Close()
+	}
+
+	r.targetMu.Lock()
+	r.cachedOnline = isUp
+	r.cachedOnlineAt = time.Now()
+	r.targetMu.Unlock()
+	return isUp
+}
+
+func winPowerShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func (r *SSHRunner) StartAGYProcess(ctx context.Context, agyArgs []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
-	quoted := make([]string, len(agyArgs))
-	for i, a := range agyArgs {
-		quoted[i] = shellQuote(a)
+	t := r.resolveTarget(ctx)
+	var remoteCmd string
+	if t.osName == "windows" {
+		psArgs := make([]string, len(agyArgs))
+		for i, a := range agyArgs {
+			if i == 0 && a == "agy" {
+				psArgs[i] = winPowerShellQuote(t.agyBin)
+			} else {
+				psArgs[i] = winPowerShellQuote(a)
+			}
+		}
+		remoteCmd = "powershell -NoProfile -Command \"& " + strings.Join(psArgs, " ") + "\""
+	} else {
+		quoted := make([]string, len(agyArgs))
+		for i, a := range agyArgs {
+			quoted[i] = shellQuote(a)
+		}
+		remoteCmd = strings.Join(quoted, " ")
 	}
-	args := append(r.sshBaseArgs(5), strings.Join(quoted, " "))
+	args := append(r.sshBaseArgsFor(t, 5), remoteCmd)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -496,6 +783,19 @@ func (r *SSHRunner) OpenOllamaChat(ctx context.Context, payload []byte) (io.Read
 		return nil, nil, err
 	}
 	return stdout, cmd.Wait, nil
+}
+
+func (r *SSHRunner) ListAGYModels(ctx context.Context) []ModelInfo {
+	t := r.resolveTarget(ctx)
+	cmdStr := t.agyBin + " models"
+	if t.osName == "windows" {
+		cmdStr = "powershell -NoProfile -Command \"& " + winPowerShellQuote(t.agyBin) + " models\""
+	}
+	stdout, err := r.runSSH(ctx, cmdStr, 8*time.Second)
+	if err != nil || stdout == "" {
+		return nil
+	}
+	return ParseAGYModelsOutput(stdout)
 }
 
 func (r *SSHRunner) ListOllamaModels(ctx context.Context) []ModelInfo {
@@ -566,7 +866,7 @@ func (r *SSHRunner) DeleteAGYConversation(ctx context.Context, convID string) (b
 		return false, err
 	}
 	pyCmd := fmt.Sprintf(
-		`python3 -c 'import os,shutil,sys; bid=sys.argv[1]; b=os.environ.get("AGY_BRAIN_DIR") or os.path.expanduser("~/.gemini/antigravity-cli/brain"); p=os.path.join(b, bid); exists=os.path.isdir(p); shutil.rmtree(p) if exists else None; print("1" if exists else "0")' %s`,
+		`python3 -c 'import os,shutil,sys,tarfile,time; bid=sys.argv[1]; b=os.path.normpath(os.environ.get("AGY_BRAIN_DIR") or os.path.expanduser("~/.gemini/antigravity-cli/brain")); p=os.path.join(b, bid); exists=os.path.isdir(p); bak_dir=os.path.join(os.path.dirname(b), "brain-backups"); (os.makedirs(bak_dir, exist_ok=True), tarfile.open(os.path.join(bak_dir, f"{bid}_{time.strftime(\"%%Y%%m%%d-%%H%%M%%S\")}.tar.gz"), "w:gz").add(p, arcname=bid), shutil.rmtree(p)) if exists else None; print("1" if exists else "0")' %s`,
 		shellQuote(clean),
 	)
 	out, err := r.runSSH(ctx, pyCmd, 5*time.Second)

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Component } from 'svelte';
+  import { untrack, type Component } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
@@ -200,28 +200,32 @@
   }
 
   $effect(() => {
-    if (!open) {
-      confirmDeleteId = null;
-      deleteError = '';
-      return;
-    }
-    if (activeTab === 'chats') {
-      load(true);
-    } else if (activeTab === 'settings') {
-      if (watchdogEnabled) {
-        fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
+    const isOpen = open;
+    const tab = activeTab;
+    untrack(() => {
+      if (!isOpen) {
+        confirmDeleteId = null;
+        deleteError = '';
+        return;
       }
-      if (cockpitEnabled && !CockpitComp && !cockpitLoadAttempted) {
-        cockpitLoadAttempted = true;
-        loadOptionalCockpitPanel()
-          .then((comp) => {
-            CockpitComp = comp;
-          })
-          .catch(() => {});
-      } else if (telemetryEnabled && !cockpitEnabled) {
-        fetchTelemetry().then((t) => (telemetry = t)).catch(() => {});
+      if (tab === 'chats') {
+        load(true);
+      } else if (tab === 'settings') {
+        if (watchdogEnabled) {
+          fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
+        }
+        if (cockpitEnabled && !CockpitComp && !cockpitLoadAttempted) {
+          cockpitLoadAttempted = true;
+          loadOptionalCockpitPanel()
+            .then((comp) => {
+              CockpitComp = comp;
+            })
+            .catch(() => {});
+        } else if (telemetryEnabled && !cockpitEnabled) {
+          fetchTelemetry().then((t) => (telemetry = t)).catch(() => {});
+        }
       }
-    }
+    });
   });
 
   const permOptions: { value: PermissionMode; label: string; desc: string; icon: 'shield' | 'zap' | 'eye' }[] = [
@@ -244,7 +248,7 @@
   <!-- Drawer -->
   <aside
     transition:fly={{ x: -320, duration: 220, easing: cubicOut }}
-    class="fixed inset-y-0 left-0 w-80 max-w-[88vw] bg-[var(--bg-elevated)] border-r border-[var(--border-subtle)] z-50 flex flex-col shadow-2xl select-none theme-surface"
+    class="fixed inset-y-0 left-0 w-80 max-w-[88vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-[var(--bg-elevated)] border-r border-[var(--border-subtle)] z-50 flex flex-col shadow-2xl select-none theme-surface"
   >
     <!-- Header -->
     <div class="p-3.5 border-b border-[var(--border-subtle)] flex items-center justify-between">
@@ -415,7 +419,7 @@
                     <button
                       type="button"
                       onclick={(e) => requestDelete(e, c.id)}
-                      class="p-1 rounded transition-colors {confirmDeleteId === c.id ? 'text-rose-400 bg-rose-500/15' : 'text-[var(--text-faint)] hover:text-rose-400'}"
+                      class="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95 {confirmDeleteId === c.id ? 'ring-2 ring-rose-300/60' : ''}"
                       title="Apagar chat"
                     >
                       <Icon name="trash" size={13} />

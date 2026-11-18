@@ -21,6 +21,12 @@ func TestCleanUserRequestAndTitleExtraction(t *testing.T) {
 	if got2 != "Anexo: foto1.png" {
 		t.Fatalf("unexpected attach-only title: %q", got2)
 	}
+
+	longPrompt := "Gostaria de melhorar ainda mais. Bem, seria possível nós fazermos isso agora?"
+	got3 := ExtractConversationTitle(longPrompt, "Conversa", 55)
+	if got3 != "Gostaria de melhorar ainda mais. Bem, seria possível…" {
+		t.Fatalf("unexpected word-boundary title: %q", got3)
+	}
 }
 
 func TestLocalRunnerBrainScan(t *testing.T) {
@@ -65,6 +71,10 @@ func TestLocalRunnerBrainScan(t *testing.T) {
 	deleted, err := r.DeleteAGYConversation(context.Background(), "conv-abc-123")
 	if err != nil || !deleted {
 		t.Fatalf("DeleteAGYConversation deleted=%v err=%v", deleted, err)
+	}
+	backups, err := filepath.Glob(filepath.Join(tmp, "brain-backups", "conv-abc-123_*.tar.gz"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("expected 1 backup tar.gz before delete, got %v err=%v", backups, err)
 	}
 	itemsAfter, err := r.ListAGYConversations(context.Background(), 10)
 	if err != nil || len(itemsAfter) != 0 {

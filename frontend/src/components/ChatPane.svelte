@@ -122,6 +122,14 @@
   let chatContainer: HTMLElement | undefined = $state();
   let fileInputEl: HTMLInputElement | undefined = $state();
   let textareaEl: HTMLTextAreaElement | undefined = $state();
+  let showScrollBottomBtn = $state(false);
+
+  function handleChatScroll() {
+    if (!chatContainer) return;
+    const distanceFromBottom =
+      chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+    showScrollBottomBtn = distanceFromBottom > 120;
+  }
 
   const slashCommands = [
     { cmd: '/usage', desc: 'Cota restante de tokens/modelos' },
@@ -851,7 +859,7 @@
           <button
             type="button"
             onclick={() => conversationId && onRequestDelete(conversationId, sessionTitle || 'Conversa AGY')}
-            class="p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 transition-colors"
+            class="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95"
             title="Apagar chat"
           >
             <Icon name="trash" size={13} />
@@ -870,7 +878,8 @@
   {/if}
 
   <!-- Chat Area -->
-  <main bind:this={chatContainer} class="flex-1 overflow-y-auto px-3 {isSplitView ? 'sm:px-4 py-3 sm:py-4' : 'sm:px-6 py-4 sm:py-6'} overscroll-contain">
+  <div class="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+  <main bind:this={chatContainer} onscroll={handleChatScroll} class="flex-1 overflow-y-auto px-3 {isSplitView ? 'sm:px-4 py-3 sm:py-4' : 'sm:px-6 py-4 sm:py-6'} overscroll-contain">
     <div class="{isSplitView ? 'w-full' : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} min-h-full flex flex-col space-y-4 sm:space-y-5">
       {#if messages.length === 0}
         <div
@@ -954,16 +963,6 @@
                         <Icon name="share" size={12} />
                         <span>Compartilhar</span>
                       </button>
-
-                      <button
-                        type="button"
-                        onclick={() => copyAgentMessage(i, msg.content)}
-                        class="px-2 py-0.5 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition-all active:scale-95 {copiedMsgIdx === i ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--accent-fg)] hover:border-[var(--border-strong)]'}"
-                        title="Copiar resposta"
-                      >
-                        <Icon name={copiedMsgIdx === i ? 'check' : 'clipboard'} size={12} />
-                        <span>{copiedMsgIdx === i ? 'Copiado' : 'Copiar'}</span>
-                      </button>
                     </div>
                   {/if}
                 {/if}
@@ -975,8 +974,26 @@
     </div>
   </main>
 
+    {#if showScrollBottomBtn}
+      <button
+        type="button"
+        data-scroll-bottom
+        transition:fly={{ y: 10, duration: 160, easing: cubicOut }}
+        onclick={() => {
+          scrollToBottom();
+          showScrollBottomBtn = false;
+        }}
+        class="absolute bottom-3 right-3 max-w-[calc(100%-1.5rem)] z-20 px-3 py-1.5 rounded-full bg-[var(--bg-elevated)] hover:bg-[var(--bg-input)] border border-[var(--accent-border)] text-[var(--accent-fg)] shadow-lg backdrop-blur-sm text-xs font-medium flex items-center gap-1.5 whitespace-nowrap"
+        title="Ir para o fim da conversa"
+      >
+        <Icon name="chevron-down" size={14} />
+        <span>Fim da conversa</span>
+      </button>
+    {/if}
+  </div>
+
   <!-- Centered Bottom Dock (HITL Card + Slash Palette + Composer Card) -->
-  <div class="w-full px-2.5 {isSplitView ? 'sm:px-3 pb-2.5' : 'sm:px-6 pb-2.5 sm:pb-4'} pt-1 shrink-0">
+  <div class="w-full px-2.5 {isSplitView ? 'sm:px-3 pb-2.5' : 'sm:px-6 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-4'} pt-1 shrink-0">
     <div class="{isSplitView ? 'w-full' : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} space-y-2">
       <!-- Interactive HITL Approval Card -->
       {#if approvalNeeded}
@@ -1199,6 +1216,7 @@
               bind:value={userInput}
               rows={1}
               placeholder={uploading ? 'Enviando arquivo...' : gatewayMode === 'standalone' ? 'Digite uma instrução...' : `Instrução para ${hostLabel}...`}
+              onfocus={() => setTimeout(scrollToBottom, 180)}
               oninput={(e) => {
                 const el = e.currentTarget;
                 el.style.height = 'auto';
@@ -1206,11 +1224,12 @@
               }}
               onkeydown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
+                  if (window.matchMedia?.('(pointer: coarse)').matches) return;
                   e.preventDefault();
                   handleSubmit();
                 }
               }}
-              class="flex-1 bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] resize-none max-h-[120px] transition-colors"
+              class="flex-1 bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-base sm:text-sm leading-5 text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] resize-none overflow-y-auto max-h-[120px] transition-colors"
             ></textarea>
 
             {#if isGenerating && activeJobId}

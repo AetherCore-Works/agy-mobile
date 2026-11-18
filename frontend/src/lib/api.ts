@@ -54,7 +54,7 @@ export interface WatchdogState {
   downtime_events: number;
 }
 
-export async function fetchStatus(): Promise<{ online: boolean; target_host: string; target_user: string; unread_alerts?: number }> {
+export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
   const res = await fetch('/api/status');
   return res.json();
 }

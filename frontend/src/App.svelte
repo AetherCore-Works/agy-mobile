@@ -72,6 +72,8 @@
 
   // Gateway Shared State
   let targetOnline = $state<boolean | null>(null);
+  let activeOS = $state<string>('linux');
+  let shellEl: HTMLDivElement | undefined = $state();
   let gatewayMode = $state<'gateway' | 'standalone' | 'ide-bridge'>('gateway');
   let outboxDir = $state('');
   let features = $state<Record<string, any>>({
@@ -233,6 +235,8 @@
   }
 
   function handlePaneGeneratingChange(tabId: string, generating: boolean) {
+    const cur = tabs.find((t) => t.id === tabId);
+    if (!cur || cur.isGenerating === generating) return;
     tabs = tabs.map((t) => (t.id === tabId ? { ...t, isGenerating: generating } : t));
   }
 
@@ -321,6 +325,7 @@
       if (typeof st.unread_alerts === 'number') {
         unreadAlerts = st.unread_alerts;
       }
+      if (st.active_os) activeOS = st.active_os;
     } catch {
       targetOnline = false;
     }
@@ -431,49 +436,71 @@
     deferredInstallPrompt = null;
   }
 
-  onMount(async () => {
+  onMount(() => {
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
     window.addEventListener('appinstalled', handleAppInstalled);
     void registerGatewayServiceWorker();
 
-    const [loadedSettings, loadedModels, loadedFeatures] = await Promise.all([
-      fetchSettings().catch(() => settings),
-      fetchModels().catch(() => models),
-      fetchFeatures().catch(() => null),
-      refreshStatusAndOutbox(),
-    ]);
-
-    settings = loadedSettings;
-    if (!hasStoredTheme() && (loadedSettings.theme_mode || loadedSettings.theme_palette)) {
-      const m = normalizeThemeMode(loadedSettings.theme_mode);
-      const p = normalizeThemePalette(loadedSettings.theme_palette);
-      themeMode = m;
-      themePalette = p;
-      applyTheme(m, p, true);
-    }
-
-    if (loadedModels.length > 0) models = loadedModels;
-    if (loadedFeatures?.features) {
-      features = loadedFeatures.features;
-      if (loadedFeatures.mode === 'standalone' || loadedFeatures.mode === 'gateway' || loadedFeatures.mode === 'ide-bridge') {
-        gatewayMode = loadedFeatures.mode;
+    const syncViewport = () => {
+      if (!shellEl) return;
+      const vv = window.visualViewport;
+      if (vv && vv.height < window.innerHeight - 80) {
+        shellEl.style.height = `${vv.height}px`;
+        shellEl.style.top = `${vv.offsetTop}px`;
+      } else {
+        shellEl.style.height = '100dvh';
+        shellEl.style.top = '0px';
       }
-      if (loadedFeatures.dirs?.outbox) {
-        outboxDir = loadedFeatures.dirs.outbox;
+    };
+    syncViewport();
+    window.visualViewport?.addEventListener('resize', syncViewport);
+    window.visualViewport?.addEventListener('scroll', syncViewport);
+
+    void (async () => {
+      const [loadedSettings, loadedModels, loadedFeatures] = await Promise.all([
+        fetchSettings().catch(() => settings),
+        fetchModels().catch(() => models),
+        fetchFeatures().catch(() => null),
+        refreshStatusAndOutbox(),
+      ]);
+
+      settings = loadedSettings;
+      if (!hasStoredTheme() && (loadedSettings.theme_mode || loadedSettings.theme_palette)) {
+        const m = normalizeThemeMode(loadedSettings.theme_mode);
+        const p = normalizeThemePalette(loadedSettings.theme_palette);
+        themeMode = m;
+        themePalette = p;
+        applyTheme(m, p, true);
       }
-    }
 
-    defaultModel = loadedSettings.default_model || 'gemini-4-hydrogen-high';
-    defaultPermission = loadedSettings.default_permission_mode || 'copilot';
+      if (loadedModels.length > 0) models = loadedModels;
+      if (loadedFeatures?.features) {
+        features = loadedFeatures.features;
+        if (loadedFeatures.mode === 'standalone' || loadedFeatures.mode === 'gateway' || loadedFeatures.mode === 'ide-bridge') {
+          gatewayMode = loadedFeatures.mode;
+        }
+        if (loadedFeatures.dirs?.outbox) {
+          outboxDir = loadedFeatures.dirs.outbox;
+        }
+      }
 
-    const convParam = new URLSearchParams(window.location.search).get('conv');
-    if (convParam) {
-      paneRefs[focusedTabId]?.loadConversation(convParam);
-      window.history.replaceState({}, '', '/');
-    }
+      defaultModel = loadedSettings.default_model || 'gemini-4-hydrogen-high';
+      defaultPermission = loadedSettings.default_permission_mode || 'copilot';
 
-    startAlertStream();
-    statusInterval = setInterval(refreshStatusAndOutbox, 15000);
+      const convParam = new URLSearchParams(window.location.search).get('conv');
+      if (convParam) {
+        paneRefs[focusedTabId]?.loadConversation(convParam);
+        window.history.replaceState({}, '', '/');
+      }
+
+      startAlertStream();
+      statusInterval = setInterval(refreshStatusAndOutbox, 15000);
+    })();
+
+    return () => {
+      window.visualViewport?.removeEventListener('resize', syncViewport);
+      window.visualViewport?.removeEventListener('scroll', syncViewport);
+    };
   });
 
   onDestroy(() => {
@@ -497,9 +524,13 @@
   }}
 />
 
-<div class="h-[100dvh] w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-[var(--bg-app)] text-[var(--text-primary)] theme-surface">
+<div
+  bind:this={shellEl}
+  style="height: 100dvh; will-change: transform, height;"
+  class="fixed inset-x-0 top-0 w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-[var(--bg-app)] text-[var(--text-primary)] theme-surface"
+>
   <!-- Header -->
-  <header class="relative h-13 bg-[var(--bg-surface)] backdrop-blur-md border-b border-[var(--border-subtle)] px-2.5 sm:px-5 flex items-center justify-between gap-1.5 shrink-0 select-none z-30 theme-surface">
+  <header class="relative h-[calc(3.25rem+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)] bg-[var(--bg-surface)] backdrop-blur-md border-b border-[var(--border-subtle)] px-2.5 sm:px-5 flex items-center justify-between gap-1.5 shrink-0 select-none z-30 theme-surface">
     <div class="flex items-center gap-2 min-w-0">
       <button
         type="button"
@@ -517,6 +548,11 @@
           <span class="w-2 h-2 rounded-full shrink-0 transition-colors {targetOnline === true ? 'bg-emerald-500' : targetOnline === false ? 'bg-rose-500' : 'bg-amber-500'}"></span>
         {/if}
         <span class="text-xs font-bold tracking-tight truncate">{hostLabel}</span>
+        {#if targetOnline === true && features.dual_boot}
+          <span class="px-1.5 py-0.5 rounded bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[10px] font-mono text-[var(--accent-fg)] shrink-0">
+            {activeOS === 'windows' ? 'Win' : 'Linux'}
+          </span>
+        {/if}
         {#if targetOnline === false && features.wol}
           <button
             type="button"
@@ -567,7 +603,7 @@
             const ctx = paneRefs[focusedTabId]?.getSnapshotContext();
             requestDeleteConversation(focusedConvId, ctx?.title || focusedTab?.title || 'Conversa atual');
           }}
-          class="p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-rose-400 transition-colors active:scale-95"
+          class="p-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95"
           title="Apagar chat atual"
           aria-label="Apagar chat atual"
         >
@@ -579,7 +615,7 @@
       <button
         type="button"
         onclick={() => (automationsOpen = true)}
-        class="relative p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
+        class="relative !overflow-visible p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
         title="Automações Cron & Alertas Ativos"
         aria-label="Automações Cron e Alertas"
       >
@@ -595,7 +631,7 @@
       <button
         type="button"
         onclick={() => (themeMenuOpen = !themeMenuOpen)}
-        class="relative p-1.5 sm:p-2 rounded-xl border transition-all active:scale-95 {themeMenuOpen ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-chip)] border-transparent text-[var(--text-secondary)] hover:text-[var(--accent-fg)]'}"
+        class="relative !overflow-visible p-2 rounded-xl border transition-all active:scale-95 {themeMenuOpen ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-chip)] border-transparent text-[var(--text-secondary)] hover:text-[var(--accent-fg)]'}"
         title="Tema e paleta de cores"
         aria-label="Tema e paleta de cores"
       >
@@ -609,7 +645,7 @@
       <button
         type="button"
         onclick={() => (outboxOpen = true)}
-        class="relative p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
+        class="relative !overflow-visible p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
         title="Outbox"
       >
         <Icon name="outbox" size={18} />
