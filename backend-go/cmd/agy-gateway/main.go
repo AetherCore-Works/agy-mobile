@@ -531,6 +531,7 @@ func buildAppMux(
 				ActiveJobID: activeJobIDForConversation(store, convID),
 				Messages:    msgs,
 			}
+			attachArtifactsToMessages(store, convID, detail.Messages)
 			if meta != nil {
 				detail.Pinned = meta.Pinned
 				detail.Tag = meta.Tag
@@ -547,6 +548,7 @@ func buildAppMux(
 			if detail, err := r.GetAGYConversation(req.Context(), convID); err == nil && detail != nil {
 				detail.Engine = "agy"
 				detail.ActiveJobID = activeJobIDForConversation(store, convID)
+				attachArtifactsToMessages(store, convID, detail.Messages)
 				if meta != nil {
 					detail.Pinned = meta.Pinned
 					detail.Tag = meta.Tag
@@ -832,12 +834,36 @@ func buildAppMux(
 		}
 		defer func() { _ = closeFn() }()
 
-		contentType := mime.TypeByExtension(filepath.Ext(cleanName))
+		ext := strings.ToLower(filepath.Ext(cleanName))
+		inlineContentTypes := map[string]string{
+			".png":  "image/png",
+			".jpg":  "image/jpeg",
+			".jpeg": "image/jpeg",
+			".webp": "image/webp",
+			".gif":  "image/gif",
+			".svg":  "image/svg+xml",
+			".pdf":  "application/pdf",
+		}
+		contentType, isInlineMedia := inlineContentTypes[ext]
+		if !isInlineMedia {
+			contentType = mime.TypeByExtension(ext)
+		}
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
+		inlineParam := strings.TrimSpace(req.URL.Query().Get("inline"))
+		wantsInline := (inlineParam == "1" || strings.EqualFold(inlineParam, "true")) && isInlineMedia
+
 		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, cleanName))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if wantsInline {
+			if ext == ".svg" {
+				w.Header().Set("Content-Security-Policy", "default-src 'none'")
+			}
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, cleanName))
+		} else {
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, cleanName))
+		}
 		_, _ = io.Copy(w, rc)
 	})
 
@@ -1177,6 +1203,7 @@ func buildAppMux(
 		mux.Handle("/api/cockpit/", newCockpitProxy(cfg.CockpitURL, cfg.CockpitToken))
 	}
 	registerAutomationRoutes(mux, store, notifier, sched)
+	registerSlashCommandRoutes(mux, store)
 
 	web.RegisterRoutes(mux, web.StaticFS())
 	return mux
