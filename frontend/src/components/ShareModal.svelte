@@ -2,6 +2,9 @@
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Icon from './Icon.svelte';
+  import { Button } from '../lib/components/ui/button/index.js';
+  import { Card } from '../lib/components/ui/card/index.js';
+  import { Tabs, TabsList, TabsTrigger } from '../lib/components/ui/tabs/index.js';
   import { createSnapshot, type ChatMessage } from '../lib/api';
   import { buildConversationMarkdown, buildStandaloneSnapshotHTML, downloadTextFile } from '../lib/export';
   import { copyTextSafe, renderMarkdown } from '../lib/markdown';
@@ -112,118 +115,116 @@
 
     <div
       transition:fly={{ y: 20, duration: 200, easing: cubicOut }}
-      class="relative w-full sm:max-w-md bg-[var(--bg-elevated)] border-t sm:border border-[var(--border-subtle)] rounded-t-2xl sm:rounded-2xl p-4 space-y-4 shadow-2xl theme-surface"
+      class="relative w-full sm:max-w-md"
     >
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex items-center gap-2 min-w-0">
-          <Icon name="share" size={17} class="text-[var(--accent-fg)]" />
-          <h2 class="text-sm font-bold text-[var(--text-primary)] truncate">Compartilhar Snapshot</h2>
-        </div>
-        <button
-          type="button"
-          onclick={() => (open = false)}
-          class="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-        >
-          <Icon name="close" size={18} />
-        </button>
-      </div>
-
-      {#if singleMarkdown.trim() && messages.length > 0}
-        <div class="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)]">
-          <button
-            type="button"
-            onclick={() => { scope = 'response'; snapshotUrl = ''; }}
-            class="py-1.5 rounded-lg text-xs font-semibold transition-all {scope === 'response' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)]'}"
-          >
-            Esta resposta
-          </button>
-          <button
-            type="button"
-            onclick={() => { scope = 'conversation'; snapshotUrl = ''; }}
-            class="py-1.5 rounded-lg text-xs font-semibold transition-all {scope === 'conversation' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)]'}"
-          >
-            Conversa toda
-          </button>
-        </div>
-      {/if}
-
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <button
-          type="button"
-          onclick={handleDownloadHTML}
-          class="p-2.5 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-fg)] text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 transition-all active:scale-95"
-        >
-          <Icon name="download" size={15} />
-          <span>Baixar HTML Formatado</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={handleDownloadMD}
-          class="p-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--border-strong)] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95"
-        >
-          <Icon name="file" size={15} />
-          <span>Baixar Markdown (.md)</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={handleCopyMarkdown}
-          class="p-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95"
-        >
-          <Icon name="clipboard" size={15} />
-          <span>Copiar Markdown</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={handleCreateLink}
-          disabled={creatingLink}
-          class="p-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--accent-border)] hover:text-[var(--accent-fg)] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95"
-        >
-          <Icon name="link" size={15} />
-          <span>{creatingLink ? 'Gerando...' : 'Link Local (/s/...)'}</span>
-        </button>
-      </div>
-
-      {#if snapshotUrl}
-        <div
-          transition:fade={{ duration: 140 }}
-          class="p-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--accent-border)] space-y-1.5"
-        >
-          <div class="text-[11px] font-medium text-[var(--text-muted)]">Link somente leitura (sem acesso à API/terminal):</div>
-          <div class="flex items-center gap-2">
-            <input
-              type="text"
-              readonly
-              value={snapshotUrl}
-              class="flex-1 bg-transparent text-xs font-mono text-[var(--accent-fg)] focus:outline-none truncate"
-            />
-            <a
-              href={snapshotUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="px-2 py-1 rounded-lg bg-[var(--accent-solid)] text-[var(--accent-on-solid)] text-[11px] font-semibold shrink-0"
-            >
-              Abrir
-            </a>
+      <Card class="rounded-t-2xl sm:rounded-2xl p-4 space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <Icon name="share" size={17} class="text-accent-foreground" />
+            <h2 class="text-sm font-bold text-foreground truncate">Compartilhar Snapshot</h2>
           </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onclick={() => (open = false)}
+          >
+            <Icon name="close" size={17} />
+          </Button>
         </div>
-      {/if}
 
-      {#if linkError}
-        <p class="text-xs text-rose-400">{linkError}</p>
-      {/if}
+        {#if singleMarkdown.trim() && messages.length > 0}
+          <Tabs
+            value={scope}
+            onValueChange={(v) => {
+              scope = v === 'conversation' ? 'conversation' : 'response';
+              snapshotUrl = '';
+            }}
+          >
+            <TabsList class="grid grid-cols-2 w-full">
+              <TabsTrigger value="response">Esta resposta</TabsTrigger>
+              <TabsTrigger value="conversation">Conversa toda</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        {/if}
 
-      {#if feedbackMsg}
-        <div
-          transition:fade={{ duration: 140 }}
-          class="p-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-500 text-xs flex items-center justify-center gap-1.5"
-        >
-          <Icon name="check" size={14} />
-          <span>{feedbackMsg}</span>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <Button
+            variant="default"
+            onclick={handleDownloadHTML}
+            class="h-10 rounded-xl"
+          >
+            <Icon name="download" size={15} />
+            <span>Baixar HTML Formatado</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            onclick={handleDownloadMD}
+            class="h-10 rounded-xl"
+          >
+            <Icon name="file" size={15} />
+            <span>Baixar Markdown (.md)</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            onclick={handleCopyMarkdown}
+            class="h-10 rounded-xl"
+          >
+            <Icon name="clipboard" size={15} />
+            <span>Copiar Markdown</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            onclick={handleCreateLink}
+            disabled={creatingLink}
+            class="h-10 rounded-xl"
+          >
+            <Icon name="link" size={15} />
+            <span>{creatingLink ? 'Gerando...' : 'Link Local (/s/...)'}</span>
+          </Button>
         </div>
-      {/if}
+
+        {#if snapshotUrl}
+          <div
+            transition:fade={{ duration: 140 }}
+            class="p-2.5 rounded-xl bg-muted border border-[var(--accent-border)] space-y-1.5"
+          >
+            <div class="text-[11px] font-medium text-muted-foreground">Link somente leitura (sem acesso à API/terminal):</div>
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                readonly
+                value={snapshotUrl}
+                class="flex-1 bg-transparent text-xs font-mono text-accent-foreground focus:outline-none truncate"
+              />
+              <Button
+                href={snapshotUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                size="xs"
+              >
+                Abrir
+              </Button>
+            </div>
+          </div>
+        {/if}
+
+        {#if linkError}
+          <p class="text-xs text-rose-400">{linkError}</p>
+        {/if}
+
+        {#if feedbackMsg}
+          <div
+            transition:fade={{ duration: 140 }}
+            class="p-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-500 text-xs flex items-center justify-center gap-1.5"
+          >
+            <Icon name="check" size={14} />
+            <span>{feedbackMsg}</span>
+          </div>
+        {/if}
+      </Card>
     </div>
   </div>
 {/if}
