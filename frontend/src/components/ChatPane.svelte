@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick, untrack } from 'svelte';
-  import { fade, fly } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
-  import Icon from './Icon.svelte';
-  import AiSpinner from './AiSpinner.svelte';
+  import { onDestroy, onMount, tick, untrack } from "svelte";
+  import { fade, fly } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+  import Icon from "./Icon.svelte";
+  import AiSpinner from "./AiSpinner.svelte";
+  import { Button } from "../lib/components/ui/button/index.js";
+  import { Card } from "../lib/components/ui/card/index.js";
+  import { Badge } from "../lib/components/ui/badge/index.js";
+  import { Textarea } from "../lib/components/ui/textarea/index.js";
+  import { Kbd } from "../lib/components/ui/kbd/index.js";
+  import GridPattern from "../lib/components/magic/GridPattern.svelte";
   import {
     cancelJob,
     createJob,
@@ -15,20 +21,20 @@
     type ChatMessage,
     type ModelInfo,
     type PermissionMode,
-  } from '../lib/api';
+  } from "../lib/api";
   import {
     CHECK_ICON_SVG,
     COPY_ICON_SVG,
     copyTextSafe,
     extractCodeFromCopyButton,
     renderMarkdown,
-  } from '../lib/markdown';
+  } from "../lib/markdown";
 
   let {
     tabId,
-    storageKeyPrefix = 'agy_',
-    visibilityMode = 'active',
-    paneOrderClass = '',
+    storageKeyPrefix = "agy_",
+    visibilityMode = "active",
+    paneOrderClass = "",
     isSplitView = false,
     isFocused = true,
     models,
@@ -46,21 +52,29 @@
   }: {
     tabId: string;
     storageKeyPrefix?: string;
-    visibilityMode?: 'active' | 'split-hidden-mobile' | 'hidden';
+    visibilityMode?: "active" | "split-hidden-mobile" | "hidden";
     paneOrderClass?: string;
     isSplitView?: boolean;
     isFocused?: boolean;
     models: ModelInfo[];
-    gatewayMode: 'gateway' | 'standalone' | 'ide-bridge';
+    gatewayMode: "gateway" | "standalone" | "ide-bridge";
     hostLabel: string;
     features: Record<string, any>;
     defaultModel: string;
     defaultPermission: PermissionMode;
-    onOpenShare: (title: string, singleMarkdown: string, messages: ChatMessage[]) => void;
+    onOpenShare: (
+      title: string,
+      singleMarkdown: string,
+      messages: ChatMessage[],
+    ) => void;
     onRequestDelete?: (convId: string, title: string) => void;
     onOpenTerminal: () => void;
     onFocus: () => void;
-    onMetaChange?: (tabId: string, title: string, convId: string | null) => void;
+    onMetaChange?: (
+      tabId: string,
+      title: string,
+      convId: string | null,
+    ) => void;
     onGeneratingChange?: (tabId: string, generating: boolean) => void;
   } = $props();
 
@@ -78,20 +92,25 @@
     if (!userTouchedModel && defaultModel) selectedModel = defaultModel;
   });
   $effect(() => {
-    if (!userTouchedPerm && defaultPermission) permissionMode = defaultPermission;
+    if (!userTouchedPerm && defaultPermission)
+      permissionMode = defaultPermission;
   });
 
-  let conversationId = $state<string | null>(localStorage.getItem(convStorageKey));
-  let sessionTitle = $state('');
+  let conversationId = $state<string | null>(
+    localStorage.getItem(convStorageKey),
+  );
+  let sessionTitle = $state("");
   let messages = $state<ChatMessage[]>([]);
-  let userInput = $state('');
+  let userInput = $state("");
   let attachedFiles = $state<{ name: string; path: string }[]>([]);
   let uploading = $state(false);
 
   let isGenerating = $state(false);
   let activeJobId = $state<string | null>(localStorage.getItem(jobStorageKey));
-  let activeJobLastSeq = $state<number>(Number(localStorage.getItem(seqStorageKey) || '0'));
-  let liveStatus = $state('');
+  let activeJobLastSeq = $state<number>(
+    Number(localStorage.getItem(seqStorageKey) || "0"),
+  );
+  let liveStatus = $state("");
   let liveElapsed = $state(0);
   let jobProgress = $state(0);
   let copiedMsgIdx = $state<number | null>(null);
@@ -108,10 +127,10 @@
   let showVoiceButton = $state(false);
   let recognition = $state<any>(null);
   let hasMediaRecorder = $state(false);
-  let voiceNotice = $state('');
+  let voiceNotice = $state("");
   let voiceNoticeTimer: ReturnType<typeof setTimeout> | null = null;
-  let voicePrefix = '';
-  let voiceFinal = '';
+  let voicePrefix = "";
+  let voiceFinal = "";
   let mediaRecorder: MediaRecorder | null = null;
   let mediaStream: MediaStream | null = null;
   let mediaChunks: BlobPart[] = [];
@@ -121,24 +140,26 @@
   let paneEl: HTMLElement | undefined = $state();
   let chatContainer: HTMLElement | undefined = $state();
   let fileInputEl: HTMLInputElement | undefined = $state();
-  let textareaEl: HTMLTextAreaElement | undefined = $state();
+  let textareaEl = $state<HTMLTextAreaElement | null>(null);
   let showScrollBottomBtn = $state(false);
 
   function handleChatScroll() {
     if (!chatContainer) return;
     const distanceFromBottom =
-      chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+      chatContainer.scrollHeight -
+      chatContainer.scrollTop -
+      chatContainer.clientHeight;
     showScrollBottomBtn = distanceFromBottom > 120;
   }
 
   const slashCommands = [
-    { cmd: '/usage', desc: 'Cota restante de tokens/modelos' },
-    { cmd: '/compact', desc: 'Compactar histórico da sessão' },
-    { cmd: '/diff', desc: 'Exibir git status e diff atual' },
-    { cmd: '/mem', desc: 'Consultar memória persistente (ai-memory)' },
-    { cmd: '/plan', desc: 'Ativar modo Planejamento (Leitura)' },
-    { cmd: '/clear', desc: 'Limpar e iniciar nova conversa' },
-    { cmd: '/status', desc: 'Status do Watchdog & recursos' },
+    { cmd: "/usage", desc: "Cota restante de tokens/modelos" },
+    { cmd: "/compact", desc: "Compactar histórico da sessão" },
+    { cmd: "/diff", desc: "Exibir git status e diff atual" },
+    { cmd: "/mem", desc: "Consultar memória persistente (ai-memory)" },
+    { cmd: "/plan", desc: "Ativar modo Planejamento (Leitura)" },
+    { cmd: "/clear", desc: "Limpar e iniciar nova conversa" },
+    { cmd: "/status", desc: "Status do Watchdog & recursos" },
   ];
 
   $effect(() => {
@@ -147,9 +168,9 @@
 
   function deriveTitle(msgs: ChatMessage[], explicitTitle?: string): string {
     if (explicitTitle?.trim()) return explicitTitle.trim();
-    const firstUser = msgs.find((m) => m.role === 'user')?.content.trim();
-    if (!firstUser) return '';
-    return firstUser.length > 44 ? firstUser.slice(0, 44) + '...' : firstUser;
+    const firstUser = msgs.find((m) => m.role === "user")?.content.trim();
+    if (!firstUser) return "";
+    return firstUser.length > 44 ? firstUser.slice(0, 44) + "..." : firstUser;
   }
 
   function notifyMeta(explicitTitle?: string) {
@@ -211,7 +232,7 @@
       streamAbort = null;
     }
     stopElapsedTimer();
-    liveStatus = '';
+    liveStatus = "";
     jobProgress = 0;
     approvalNeeded = null;
     isGenerating = false;
@@ -220,7 +241,7 @@
   async function handleCancelActiveJob() {
     if (!activeJobId) return;
     const jid = activeJobId;
-    liveStatus = 'Cancelando execução...';
+    liveStatus = "Cancelando execução...";
     try {
       await cancelJob(jid);
     } catch {
@@ -236,38 +257,44 @@
     let jobFinished = false;
     let currentTools: string[] = [];
 
-    if (messages.length === 0 || messages[messages.length - 1].role !== 'agent') {
-      messages = [...messages, { role: 'agent', content: '' }];
+    if (
+      messages.length === 0 ||
+      messages[messages.length - 1].role !== "agent"
+    ) {
+      messages = [...messages, { role: "agent", content: "" }];
     }
     const agentIdx = messages.length - 1;
 
     try {
-      const response = await fetch(`/api/jobs/${jobId}/events?after=${afterSeq}`, {
-        signal: controller.signal,
-        credentials: 'same-origin',
-      });
+      const response = await fetch(
+        `/api/jobs/${jobId}/events?after=${afterSeq}`,
+        {
+          signal: controller.signal,
+          credentials: "same-origin",
+        },
+      );
 
       if (!response.ok || !response.body) {
         throw new Error(`HTTP ${response.status}`);
       }
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
-          if (!line || line.startsWith(':')) continue;
+          if (!line || line.startsWith(":")) continue;
 
-          if (line.startsWith('id: ')) {
+          if (line.startsWith("id: ")) {
             const parsedId = parseInt(line.slice(4), 10);
             if (!Number.isNaN(parsedId)) {
               activeJobLastSeq = parsedId;
@@ -276,51 +303,58 @@
             continue;
           }
 
-          if (!line.startsWith('data: ')) continue;
+          if (!line.startsWith("data: ")) continue;
           const dataStr = line.slice(6);
-          if (dataStr === '[DONE]') {
+          if (dataStr === "[DONE]") {
             jobFinished = true;
             break;
           }
 
           try {
             const ev = JSON.parse(dataStr);
-            if (ev.type === 'init') {
+            if (ev.type === "init") {
               if (ev.conversation_id) {
                 conversationId = ev.conversation_id;
                 localStorage.setItem(convStorageKey, ev.conversation_id);
                 notifyMeta();
               }
               setProgressFloor(18);
-            } else if (ev.type === 'delta') {
+            } else if (ev.type === "delta") {
               messages[agentIdx].content += ev.text;
               messages = messages;
-              deltaCharsCount += String(ev.text || '').length;
-              setProgressFloor(56 + 40 * (1 - Math.exp(-deltaCharsCount / 520)));
-              liveStatus = 'Digitando resposta...';
+              deltaCharsCount += String(ev.text || "").length;
+              setProgressFloor(
+                56 + 40 * (1 - Math.exp(-deltaCharsCount / 520)),
+              );
+              liveStatus = "Digitando resposta...";
               scrollToBottom();
-            } else if (ev.type === 'tool') {
-              const tName = ev.name || 'ferramenta';
+            } else if (ev.type === "tool") {
+              const tName = ev.name || "ferramenta";
               if (ev.name && !currentTools.includes(ev.name)) {
                 currentTools.push(ev.name);
               }
-              toolStepCount += ev.state === 'ACTIVE' ? 1 : 0.6;
+              toolStepCount += ev.state === "ACTIVE" ? 1 : 0.6;
               setProgressFloor(20 + 54 * (1 - Math.exp(-toolStepCount * 0.42)));
-              const preview = ev.preview ? ` (${String(ev.preview).slice(0, 28)}...)` : '';
-              liveStatus = ev.state === 'ACTIVE' ? `Executando: ${tName}${preview}` : `Concluído: ${tName}`;
+              const preview = ev.preview
+                ? ` (${String(ev.preview).slice(0, 28)}...)`
+                : "";
+              liveStatus =
+                ev.state === "ACTIVE"
+                  ? `Executando: ${tName}${preview}`
+                  : `Concluído: ${tName}`;
               scrollToBottom();
-            } else if (ev.type === 'approval_needed') {
+            } else if (ev.type === "approval_needed") {
               approvalNeeded = {
-                tool: ev.tool || 'permissão',
-                command: ev.command || '',
+                tool: ev.tool || "permissão",
+                command: ev.command || "",
               };
               setProgressFloor(68);
-              liveStatus = 'Aguardando aprovação humana (HITL)...';
+              liveStatus = "Aguardando aprovação humana (HITL)...";
               scrollToBottom();
-            } else if (ev.type === 'done') {
+            } else if (ev.type === "done") {
               jobFinished = true;
               jobProgress = 100;
-              liveStatus = 'Concluído';
+              liveStatus = "Concluído";
               if (ev.conversation_id) {
                 conversationId = ev.conversation_id;
                 localStorage.setItem(convStorageKey, ev.conversation_id);
@@ -330,14 +364,19 @@
                 if (ev.response && String(ev.response).trim()) {
                   messages[agentIdx].content = String(ev.response).trim();
                 } else {
-                  const tools = (ev.executed_tools && ev.executed_tools.length) ? ev.executed_tools : currentTools;
-                  messages[agentIdx].content = tools.length > 0
-                    ? `*Instruções executadas em ${hostLabel} com sucesso.*\n\n**Ações executadas:**\n` + tools.map((t: string) => `- \`${t}\``).join('\n')
-                    : `*Instrução concluída com sucesso em ${hostLabel}.*`;
+                  const tools =
+                    ev.executed_tools && ev.executed_tools.length
+                      ? ev.executed_tools
+                      : currentTools;
+                  messages[agentIdx].content =
+                    tools.length > 0
+                      ? `*Instruções executadas em ${hostLabel} com sucesso.*\n\n**Ações executadas:**\n` +
+                        tools.map((t: string) => `- \`${t}\``).join("\n")
+                      : `*Instrução concluída com sucesso em ${hostLabel}.*`;
                 }
                 messages = messages;
               }
-            } else if (ev.type === 'error') {
+            } else if (ev.type === "error") {
               jobFinished = true;
               messages[agentIdx].content += `\n\n> **Erro:** ${ev.error}`;
               messages = messages;
@@ -348,11 +387,11 @@
         }
       }
     } catch (err: any) {
-      if (err?.name === 'AbortError') return;
-      if (document.visibilityState === 'visible' && activeJobId === jobId) {
-        liveStatus = 'Reconectando ao stream...';
+      if (err?.name === "AbortError") return;
+      if (document.visibilityState === "visible" && activeJobId === jobId) {
+        liveStatus = "Reconectando ao stream...";
         setTimeout(() => {
-          if (activeJobId === jobId && document.visibilityState === 'visible') {
+          if (activeJobId === jobId && document.visibilityState === "visible") {
             streamJobEvents(jobId, activeJobLastSeq);
           }
         }, 1500);
@@ -362,11 +401,12 @@
 
     if (jobFinished && activeJobId === jobId) {
       if (!messages[agentIdx].content.trim()) {
-        messages[agentIdx].content = `*Instrução concluída com sucesso em ${hostLabel}.*`;
+        messages[agentIdx].content =
+          `*Instrução concluída com sucesso em ${hostLabel}.*`;
         messages = messages;
       }
       jobProgress = 100;
-      liveStatus = 'Concluído';
+      liveStatus = "Concluído";
       stopElapsedTimer();
       scrollToBottom();
       finishTimer = setTimeout(() => {
@@ -377,25 +417,32 @@
     }
   }
 
-  async function submitPromptInternal(promptText: string, filesToSend: string[] = []) {
+  async function submitPromptInternal(
+    promptText: string,
+    filesToSend: string[] = [],
+  ) {
     const text = promptText.trim();
     if ((!text && filesToSend.length === 0) || isGenerating) return;
 
-    const displayPrompt = text || `[${filesToSend.length} arquivo(s) enviado(s)]`;
+    const displayPrompt =
+      text || `[${filesToSend.length} arquivo(s) enviado(s)]`;
     messages = [
       ...messages,
-      { role: 'user', content: displayPrompt },
-      { role: 'agent', content: '' },
+      { role: "user", content: displayPrompt },
+      { role: "agent", content: "" },
     ];
     notifyMeta();
     isGenerating = true;
-    liveStatus = gatewayMode === 'standalone' ? 'Iniciando localmente...' : `Iniciando em ${hostLabel}...`;
+    liveStatus =
+      gatewayMode === "standalone"
+        ? "Iniciando localmente..."
+        : `Iniciando em ${hostLabel}...`;
     startElapsedTimer();
     scrollToBottom();
 
     try {
       const job = await createJob({
-        prompt: text || 'Analise os arquivos anexados.',
+        prompt: text || "Analise os arquivos anexados.",
         conversation_id: conversationId,
         model: selectedModel,
         permission_mode: permissionMode,
@@ -405,7 +452,7 @@
       activeJobId = job.job_id;
       activeJobLastSeq = 0;
       localStorage.setItem(jobStorageKey, job.job_id);
-      localStorage.setItem(seqStorageKey, '0');
+      localStorage.setItem(seqStorageKey, "0");
 
       if (job.conversation_id) {
         conversationId = job.conversation_id;
@@ -416,11 +463,14 @@
       await streamJobEvents(job.job_id, 0);
     } catch (err: any) {
       const errText = `> **Erro:** ${err?.message || err}`;
-      if (messages.length > 0 && messages[messages.length - 1].role === 'agent') {
+      if (
+        messages.length > 0 &&
+        messages[messages.length - 1].role === "agent"
+      ) {
         messages[messages.length - 1].content = errText;
         messages = messages;
       } else {
-        messages = [...messages, { role: 'agent', content: errText }];
+        messages = [...messages, { role: "agent", content: errText }];
       }
       clearActiveJob();
     }
@@ -432,50 +482,69 @@
     if ((!text && attachedFiles.length === 0) || isGenerating) return;
     const filesToSend = attachedFiles.map((f) => f.path);
 
-    userInput = '';
+    userInput = "";
     attachedFiles = [];
-    if (textareaEl) textareaEl.style.height = 'auto';
+    if (textareaEl) textareaEl.style.height = "auto";
 
     await submitPromptInternal(text, filesToSend);
   }
 
   async function runSlashCommand(cmd: string) {
     slashMenuOpen = false;
-    userInput = '';
-    if (cmd === '/clear') {
+    userInput = "";
+    if (cmd === "/clear") {
       newConversation();
       return;
     }
-    if (cmd === '/plan') {
+    if (cmd === "/plan") {
       userTouchedPerm = true;
-      permissionMode = 'readonly';
-      messages = [...messages, { role: 'agent', content: '**Modo Planejamento (`readonly`) ativado.** Nenhuma alteração será aplicada sem revisão.' }];
+      permissionMode = "readonly";
+      messages = [
+        ...messages,
+        {
+          role: "agent",
+          content:
+            "**Modo Planejamento (`readonly`) ativado.** Nenhuma alteração será aplicada sem revisão.",
+        },
+      ];
       scrollToBottom();
       return;
     }
-    if (cmd === '/diff') {
-      await submitPromptInternal('Execute git status -s e git diff no workspace atual e exiba a saída dentro de um bloco ```diff.');
+    if (cmd === "/diff") {
+      await submitPromptInternal(
+        "Execute git status -s e git diff no workspace atual e exiba a saída dentro de um bloco ```diff.",
+      );
       return;
     }
-    if (cmd === '/mem') {
-      userInput = 'Consulte no ai-memory: ';
+    if (cmd === "/mem") {
+      userInput = "Consulte no ai-memory: ";
       textareaEl?.focus();
       return;
     }
-    if (cmd === '/status') {
+    if (cmd === "/status") {
       const [wd, feat] = await Promise.all([fetchWatchdog(), fetchFeatures()]);
       const summary = [
         `### Status do Gateway (v${feat.version})`,
-        `- **Host:** ${hostLabel} (${wd.online === false ? 'Offline' : 'Online'})`,
+        `- **Host:** ${hostLabel} (${wd.online === false ? "Offline" : "Online"})`,
         `- **Verificações Watchdog:** ${wd.uptime_checks} (Quedas: ${wd.downtime_events})`,
-        `- **Recursos:** ${Object.entries(feat.features).filter(([, v]) => v === true).map(([k]) => `\`${k}\``).join(', ')}`,
-      ].join('\n');
-      messages = [...messages, { role: 'agent', content: summary }];
+        `- **Recursos:** ${Object.entries(feat.features)
+          .filter(([, v]) => v === true)
+          .map(([k]) => `\`${k}\``)
+          .join(", ")}`,
+      ].join("\n");
+      messages = [...messages, { role: "agent", content: summary }];
       scrollToBottom();
       return;
     }
-    if (cmd === '/compact' && !conversationId) {
-      messages = [...messages, { role: 'agent', content: '> Não há conversa ativa para compactar. Envie uma mensagem ou carregue uma sessão primeiro.' }];
+    if (cmd === "/compact" && !conversationId) {
+      messages = [
+        ...messages,
+        {
+          role: "agent",
+          content:
+            "> Não há conversa ativa para compactar. Envie uma mensagem ou carregue uma sessão primeiro.",
+        },
+      ];
       scrollToBottom();
       return;
     }
@@ -489,7 +558,7 @@
       conversationId = id;
       localStorage.setItem(convStorageKey, id);
       messages = data.messages || [];
-      sessionTitle = data.title || titleHint || '';
+      sessionTitle = data.title || titleHint || "";
       notifyMeta(sessionTitle);
       await scrollToBottom();
 
@@ -497,7 +566,7 @@
         activeJobId = data.active_job_id;
         activeJobLastSeq = 0;
         isGenerating = true;
-        liveStatus = 'Retomando execução...';
+        liveStatus = "Retomando execução...";
         startElapsedTimer(16);
         await streamJobEvents(data.active_job_id, 0);
       }
@@ -509,19 +578,23 @@
   export function newConversation() {
     clearActiveJob();
     conversationId = null;
-    sessionTitle = '';
+    sessionTitle = "";
     localStorage.removeItem(convStorageKey);
     messages = [];
-    notifyMeta('');
+    notifyMeta("");
   }
 
   export async function submitExternalPrompt(promptText: string) {
     await submitPromptInternal(promptText);
   }
 
-  export function getSnapshotContext(): { title: string; messages: ChatMessage[]; convId: string | null } {
+  export function getSnapshotContext(): {
+    title: string;
+    messages: ChatMessage[];
+    convId: string | null;
+  } {
     return {
-      title: sessionTitle || deriveTitle(messages) || 'Conversa AGY',
+      title: sessionTitle || deriveTitle(messages) || "Conversa AGY",
       messages,
       convId: conversationId,
     };
@@ -534,11 +607,14 @@
     try {
       for (const file of Array.from(input.files)) {
         const res = await uploadFile(file);
-        attachedFiles = [...attachedFiles, { name: res.filename, path: res.path }];
+        attachedFiles = [
+          ...attachedFiles,
+          { name: res.filename, path: res.path },
+        ];
       }
     } finally {
       uploading = false;
-      input.value = '';
+      input.value = "";
     }
   }
 
@@ -546,36 +622,36 @@
     voiceNotice = msg;
     if (voiceNoticeTimer) clearTimeout(voiceNoticeTimer);
     voiceNoticeTimer = setTimeout(() => {
-      if (voiceNotice === msg) voiceNotice = '';
+      if (voiceNotice === msg) voiceNotice = "";
     }, 6500);
   }
 
   function syncTextareaHeight() {
     tick().then(() => {
       if (!textareaEl) return;
-      textareaEl.style.height = 'auto';
+      textareaEl.style.height = "auto";
       textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, 120)}px`;
     });
   }
 
   function mapSpeechError(code: string): string {
     switch (code) {
-      case 'not-allowed':
-      case 'service-not-allowed':
-        if (typeof window !== 'undefined' && !window.isSecureContext) {
-          return 'Microfone bloqueado em HTTP local. Use HTTPS / domínio próprio ou o microfone do teclado.';
+      case "not-allowed":
+      case "service-not-allowed":
+        if (typeof window !== "undefined" && !window.isSecureContext) {
+          return "Microfone bloqueado em HTTP local. Use HTTPS / domínio próprio ou o microfone do teclado.";
         }
-        return 'Permissão de microfone ou ditado negada no navegador.';
-      case 'audio-capture':
-        return 'Nenhum microfone disponível ou em uso por outro app.';
-      case 'no-speech':
-        return 'Nenhuma fala detectada. Tente falar mais perto do microfone.';
-      case 'network':
-        return 'Serviço de reconhecimento de voz do navegador indisponível.';
-      case 'aborted':
-        return '';
+        return "Permissão de microfone ou ditado negada no navegador.";
+      case "audio-capture":
+        return "Nenhum microfone disponível ou em uso por outro app.";
+      case "no-speech":
+        return "Nenhuma fala detectada. Tente falar mais perto do microfone.";
+      case "network":
+        return "Serviço de reconhecimento de voz do navegador indisponível.";
+      case "aborted":
+        return "";
       default:
-        return `Erro no ditado por voz (${code || 'desconhecido'}).`;
+        return `Erro no ditado por voz (${code || "desconhecido"}).`;
     }
   }
 
@@ -593,17 +669,33 @@
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStream = stream;
       mediaChunks = [];
-      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
-      const mimeType = candidates.find((m) => typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(m)) || '';
-      const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "audio/ogg",
+      ];
+      const mimeType =
+        candidates.find(
+          (m) =>
+            typeof MediaRecorder.isTypeSupported === "function" &&
+            MediaRecorder.isTypeSupported(m),
+        ) || "";
+      const rec = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       mediaRecorder = rec;
 
       rec.ondataavailable = (ev) => {
         if (ev.data && ev.data.size > 0) mediaChunks.push(ev.data);
       };
       rec.onstop = async () => {
-        const blobType = rec.mimeType || mimeType || 'audio/webm';
-        const ext = blobType.includes('mp4') ? 'm4a' : blobType.includes('ogg') ? 'ogg' : 'webm';
+        const blobType = rec.mimeType || mimeType || "audio/webm";
+        const ext = blobType.includes("mp4")
+          ? "m4a"
+          : blobType.includes("ogg")
+            ? "ogg"
+            : "webm";
         const blob = new Blob(mediaChunks, { type: blobType });
         cleanupMediaRecording();
         isListening = false;
@@ -615,10 +707,10 @@
             userInput = userInput.trim() ? `${userInput.trim()} ${text}` : text;
             syncTextareaHeight();
           } else {
-            flashVoiceNotice('Nenhuma fala reconhecida na gravação.');
+            flashVoiceNotice("Nenhuma fala reconhecida na gravação.");
           }
         } catch (err: any) {
-          flashVoiceNotice(err?.message || 'Falha ao transcrever áudio.');
+          flashVoiceNotice(err?.message || "Falha ao transcrever áudio.");
         } finally {
           transcribingVoice = false;
         }
@@ -626,26 +718,35 @@
       rec.onerror = () => {
         isListening = false;
         cleanupMediaRecording();
-        flashVoiceNotice('Falha ao gravar áudio do microfone.');
+        flashVoiceNotice("Falha ao gravar áudio do microfone.");
       };
       rec.start();
       isListening = true;
-      voiceNotice = '';
+      voiceNotice = "";
     } catch (err: any) {
       isListening = false;
       cleanupMediaRecording();
-      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
-        flashVoiceNotice('Permissão de microfone negada nas configurações do navegador.');
+      if (
+        err?.name === "NotAllowedError" ||
+        err?.name === "PermissionDeniedError"
+      ) {
+        flashVoiceNotice(
+          "Permissão de microfone negada nas configurações do navegador.",
+        );
       } else {
-        flashVoiceNotice(err?.message || 'Não foi possível acessar o microfone.');
+        flashVoiceNotice(
+          err?.message || "Não foi possível acessar o microfone.",
+        );
       }
     }
   }
 
   function toggleVoice() {
-    voiceNotice = '';
-    if (typeof window !== 'undefined' && !window.isSecureContext) {
-      flashVoiceNotice('O microfone no navegador exige HTTPS / domínio próprio (ou localhost). Em HTTP local, use o microfone do teclado do celular.');
+    voiceNotice = "";
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      flashVoiceNotice(
+        "O microfone no navegador exige HTTPS / domínio próprio (ou localhost). Em HTTP local, use o microfone do teclado do celular.",
+      );
       return;
     }
 
@@ -664,7 +765,7 @@
         return;
       }
       voicePrefix = userInput.trim();
-      voiceFinal = '';
+      voiceFinal = "";
       try {
         recognition.start();
         return;
@@ -674,7 +775,9 @@
           void startWhisperRecording();
           return;
         }
-        flashVoiceNotice(err?.message || 'Não foi possível iniciar o reconhecimento de voz.');
+        flashVoiceNotice(
+          err?.message || "Não foi possível iniciar o reconhecimento de voz.",
+        );
         return;
       }
     }
@@ -684,7 +787,9 @@
       return;
     }
 
-    flashVoiceNotice('Ditado nativo indisponível neste navegador. Use o microfone do teclado ou ative HTTPS.');
+    flashVoiceNotice(
+      "Ditado nativo indisponível neste navegador. Use o microfone do teclado ou ative HTTPS.",
+    );
   }
 
   async function copyAgentMessage(idx: number, content: string) {
@@ -701,7 +806,9 @@
   async function handleDocumentClick(e: MouseEvent) {
     const target = e.target as HTMLElement | null;
     if (!target || !chatContainer?.contains(target)) return;
-    const btn = target.closest('button[data-copy-code]') as HTMLButtonElement | null;
+    const btn = target.closest(
+      "button[data-copy-code]",
+    ) as HTMLButtonElement | null;
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
@@ -711,7 +818,7 @@
     const ok = await copyTextSafe(rawText);
     if (!ok) return;
 
-    btn.dataset.copied = 'true';
+    btn.dataset.copied = "true";
     btn.innerHTML = `${CHECK_ICON_SVG}<span>Copiado</span>`;
     setTimeout(() => {
       if (!btn.isConnected) return;
@@ -721,42 +828,53 @@
   }
 
   function handleVisibilityChange() {
-    if (document.visibilityState === 'visible' && activeJobId && !streamAbort) {
-      liveStatus = 'Retomando stream...';
+    if (document.visibilityState === "visible" && activeJobId && !streamAbort) {
+      liveStatus = "Retomando stream...";
       streamJobEvents(activeJobId, activeJobLastSeq);
     }
   }
 
   onMount(async () => {
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     hasMediaRecorder =
-      typeof window !== 'undefined' &&
-      typeof MediaRecorder !== 'undefined' &&
+      typeof window !== "undefined" &&
+      typeof MediaRecorder !== "undefined" &&
       Boolean(navigator.mediaDevices?.getUserMedia);
 
-    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRec =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
     showVoiceButton =
-      typeof window !== 'undefined' &&
-      (!window.isSecureContext || Boolean(SpeechRec) || (Boolean(features.whisper) && hasMediaRecorder));
+      typeof window !== "undefined" &&
+      (!window.isSecureContext ||
+        Boolean(SpeechRec) ||
+        (Boolean(features.whisper) && hasMediaRecorder));
     if (SpeechRec) {
       const rec = new SpeechRec();
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-      rec.lang = 'pt-BR';
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(
+        navigator.userAgent || "",
+      );
+      rec.lang = "pt-BR";
       // Chrome Android drops/duplicates interim streams when continuous=true
       rec.continuous = !isMobile;
       rec.interimResults = true;
       rec.onstart = () => {
         isListening = true;
-        voiceNotice = '';
+        voiceNotice = "";
       };
       rec.onend = () => {
         isListening = false;
       };
       rec.onerror = (ev: any) => {
         isListening = false;
-        const code = String(ev?.error || '');
-        if ((code === 'network' || code === 'service-not-allowed') && features.whisper && hasMediaRecorder && window.isSecureContext) {
+        const code = String(ev?.error || "");
+        if (
+          (code === "network" || code === "service-not-allowed") &&
+          features.whisper &&
+          hasMediaRecorder &&
+          window.isSecureContext
+        ) {
           void startWhisperRecording();
           return;
         }
@@ -764,10 +882,10 @@
         if (msg) flashVoiceNotice(msg);
       };
       rec.onresult = (ev: any) => {
-        let interim = '';
+        let interim = "";
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           const res = ev.results[i];
-          const text = String(res?.[0]?.transcript || '').trim();
+          const text = String(res?.[0]?.transcript || "").trim();
           if (!text) continue;
           if (res.isFinal) {
             voiceFinal = voiceFinal ? `${voiceFinal} ${text}` : text;
@@ -775,7 +893,9 @@
             interim = interim ? `${interim} ${text}` : text;
           }
         }
-        userInput = [voicePrefix, voiceFinal, interim].filter(Boolean).join(' ');
+        userInput = [voicePrefix, voiceFinal, interim]
+          .filter(Boolean)
+          .join(" ");
         syncTextareaHeight();
       };
       recognition = rec;
@@ -785,14 +905,14 @@
       await loadConversation(conversationId);
     } else if (activeJobId) {
       isGenerating = true;
-      liveStatus = 'Retomando sessão ativa...';
+      liveStatus = "Retomando sessão ativa...";
       startElapsedTimer(16);
       await streamJobEvents(activeJobId, activeJobLastSeq);
     }
   });
 
   onDestroy(() => {
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
     if (finishTimer) clearTimeout(finishTimer);
     if (copyMsgTimer) clearTimeout(copyMsgTimer);
     if (voiceNoticeTimer) clearTimeout(voiceNoticeTimer);
@@ -801,7 +921,7 @@
     } catch {
       // ignore
     }
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
       try {
         mediaRecorder.stop();
       } catch {
@@ -825,22 +945,41 @@
 <section
   bind:this={paneEl}
   onfocusin={onFocus}
-  class="{visibilityMode === 'active' ? 'flex' : visibilityMode === 'split-hidden-mobile' ? 'hidden md:flex' : 'hidden'} flex-col flex-1 min-w-0 min-h-0 h-full {paneOrderClass} {isSplitView ? 'rounded-2xl border overflow-hidden bg-[var(--bg-app)] theme-surface ' + (isFocused ? 'border-[var(--accent-border)]' : 'border-[var(--border-subtle)]') : ''}"
+  class="{visibilityMode === 'active'
+    ? 'flex'
+    : visibilityMode === 'split-hidden-mobile'
+      ? 'hidden md:flex'
+      : 'hidden'} flex-col flex-1 min-w-0 min-h-0 h-full {paneOrderClass} {isSplitView
+    ? 'rounded-2xl border overflow-hidden bg-[var(--bg-app)] theme-surface ' +
+      (isFocused
+        ? 'border-[var(--accent-border)]'
+        : 'border-[var(--border-subtle)]')
+    : ''}"
 >
   {#if isSplitView}
     <!-- Split Pane Mini Header -->
-    <div class="h-9 px-3 bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-2 shrink-0 select-none">
+    <div
+      class="h-9 px-3 bg-[var(--bg-surface)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-2 shrink-0 select-none"
+    >
       <div class="flex items-center gap-2 min-w-0">
         {#if isGenerating}
           <AiSpinner size={12} class="text-[var(--accent-fg)]" />
         {:else}
-          <span class="w-1.5 h-1.5 rounded-full shrink-0 {isFocused ? 'bg-[var(--accent-fg)]' : 'bg-[var(--text-faint)]'}"></span>
+          <span
+            class="w-1.5 h-1.5 rounded-full shrink-0 {isFocused
+              ? 'bg-[var(--accent-fg)]'
+              : 'bg-[var(--text-faint)]'}"
+          ></span>
         {/if}
-        <span class="text-[11px] font-semibold text-[var(--text-primary)] truncate">
-          {sessionTitle || 'Nova Sessão'}
+        <span
+          class="text-[11px] font-semibold text-[var(--text-primary)] truncate"
+        >
+          {sessionTitle || "Nova Sessão"}
         </span>
-        <span class="text-[10px] font-mono text-[var(--text-faint)] truncate hidden lg:inline">
-          ({selectedModel.replace('ollama:', '')})
+        <span
+          class="text-[10px] font-mono text-[var(--text-faint)] truncate hidden lg:inline"
+        >
+          ({selectedModel.replace("ollama:", "")})
         </span>
       </div>
 
@@ -848,7 +987,8 @@
         {#if messages.length > 0}
           <button
             type="button"
-            onclick={() => onOpenShare(sessionTitle || 'Conversa AGY', '', messages)}
+            onclick={() =>
+              onOpenShare(sessionTitle || "Conversa AGY", "", messages)}
             class="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-fg)] transition-colors"
             title="Compartilhar conversa"
           >
@@ -858,8 +998,10 @@
         {#if conversationId && onRequestDelete}
           <button
             type="button"
-            onclick={() => conversationId && onRequestDelete(conversationId, sessionTitle || 'Conversa AGY')}
-            class="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95"
+            onclick={() =>
+              conversationId &&
+              onRequestDelete(conversationId, sessionTitle || "Conversa AGY")}
+            class="p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
             title="Apagar chat"
           >
             <Icon name="trash" size={13} />
@@ -879,381 +1021,563 @@
 
   <!-- Chat Area -->
   <div class="relative flex-1 min-h-0 flex flex-col overflow-hidden">
-  <main bind:this={chatContainer} onscroll={handleChatScroll} class="flex-1 overflow-y-auto px-3 {isSplitView ? 'sm:px-4 py-3 sm:py-4' : 'sm:px-6 py-4 sm:py-6'} overscroll-contain">
-    <div class="{isSplitView ? 'w-full' : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} min-h-full flex flex-col space-y-4 sm:space-y-5">
-      {#if messages.length === 0}
-        <div
-          in:fade={{ duration: 220 }}
-          class="flex-1 flex flex-col items-center justify-center text-center px-4 py-8 text-[var(--text-faint)] select-none"
-        >
-          <div class="p-2 rounded-3xl bg-[var(--accent-soft)] border border-[var(--accent-border)] mb-3 shadow-sm">
-            <img src="/static/icon.svg" class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl" alt="AGY Logo" />
-          </div>
-          <h1 class="text-sm font-bold text-[var(--text-primary)]">Antigravity Mobile Gateway</h1>
-          <p class="text-xs text-[var(--text-muted)] mt-1 max-w-xs leading-relaxed">
-            Svelte 5 + SSE resumível. Suporta Gemini 4 Hydrogen, Extra, Ollama local, Inbox/Outbox e Terminal Web.
-          </p>
-        </div>
-      {:else}
-        {#each messages as msg, i}
-          {@const isActiveBubble = isGenerating && i === messages.length - 1 && msg.role === 'agent'}
-          <div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'} min-w-0 animate-msg-in">
-            {#if msg.role === 'user'}
+    <main
+      bind:this={chatContainer}
+      onscroll={handleChatScroll}
+      class="flex-1 overflow-y-auto px-3 {isSplitView
+        ? 'sm:px-4 py-3 sm:py-4'
+        : 'sm:px-6 py-4 sm:py-6'} overscroll-contain"
+    >
+      <div
+        class="{isSplitView
+          ? 'w-full'
+          : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} min-h-full flex flex-col space-y-4 sm:space-y-5"
+      >
+        {#if messages.length === 0}
+          <div
+            in:fade={{ duration: 220 }}
+            class="relative flex-1 flex flex-col items-center justify-center text-center px-3 sm:px-6 py-8 select-none overflow-hidden"
+          >
+            <div
+              class="pointer-events-none absolute inset-0 overflow-hidden [mask-image:radial-gradient(ellipse_at_center,white_18%,transparent_72%)]"
+            >
+              <GridPattern width={32} height={32} />
+            </div>
+
+            <div class="relative z-10 flex flex-col items-center max-w-md mx-auto">
               <div
-                class="max-w-[85%] sm:max-w-[78%] rounded-2xl rounded-br-sm bg-[var(--accent-solid)] text-[var(--accent-on-solid)] px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words theme-surface"
-                style="box-shadow: var(--shadow-card);"
+                class="inline-flex items-center gap-2 rounded-full border border-border bg-card/90 backdrop-blur-sm px-3 py-1 mb-5 shadow-xs"
               >
-                {msg.content}
+                <span class="size-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[11px] font-semibold text-foreground"
+                  >{gatewayMode === "standalone" ? "AGY Local" : hostLabel}</span
+                >
+                <span class="h-3 w-px bg-border"></span>
+                <span class="text-[11px] text-muted-foreground font-mono"
+                  >SSE Resumível</span
+                >
               </div>
-            {:else}
-              <div
-                class="max-w-[96%] sm:max-w-[93%] min-w-0 rounded-2xl rounded-bl-sm bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)] px-4 py-3.5 {isSplitView ? 'sm:px-4 sm:py-3.5' : 'sm:px-6 sm:py-5'} theme-surface"
-                style="box-shadow: var(--shadow-card);"
+
+              <Card
+                class="p-2.5 rounded-2xl mb-4 bg-card/95 shadow-md ring-1 ring-foreground/10"
               >
-                {#if isActiveBubble && !msg.content.trim()}
-                  <div class="flex items-center gap-2.5 py-0.5 min-w-[205px] sm:min-w-[240px]">
-                    <AiSpinner size={20} class="text-[var(--accent-fg)]" />
-                    <div class="min-w-0 flex-1 space-y-1.5">
-                      <div class="flex items-center justify-between gap-2.5">
-                        <span class="text-xs font-medium text-[var(--text-secondary)] truncate">
-                          {liveStatus || 'Processando solicitação...'}
-                        </span>
-                        <span class="text-[10px] font-mono font-semibold text-[var(--accent-fg)] shrink-0">
-                          {Math.round(jobProgress)}%
-                        </span>
-                      </div>
-                      <div class="w-full h-1.5 rounded-full progress-track overflow-hidden">
-                        <div
-                          class="h-full rounded-full progress-fill"
-                          style="width: {jobProgress}%;"
-                        ></div>
-                      </div>
-                    </div>
-                  </div>
-                {:else}
-                  <div class="markdown-body {isActiveBubble ? 'typing-cursor' : ''}">
-                    {@html renderMarkdown(msg.content)}
-                  </div>
-                  {#if isActiveBubble}
-                    <div class="mt-2.5 pt-2 border-t border-[var(--border-subtle)] space-y-1.5 text-[11px] text-[var(--text-muted)]">
-                      <div class="flex items-center justify-between gap-3">
-                        <div class="flex items-center gap-2 min-w-0">
-                          <AiSpinner size={14} class="text-[var(--accent-fg)]" />
-                          <span class="truncate">{liveStatus || 'Gerando resposta...'}</span>
-                        </div>
-                        <span class="font-mono text-[var(--text-faint)] shrink-0">
-                          {Math.round(jobProgress)}% · {liveElapsed}s
-                        </span>
-                      </div>
-                      <div class="w-full h-1 rounded-full progress-track overflow-hidden">
-                        <div
-                          class="h-full rounded-full progress-fill"
-                          style="width: {jobProgress}%;"
-                        ></div>
-                      </div>
-                    </div>
-                  {:else if msg.content.trim()}
-                    <div class="mt-4 pt-2.5 border-t border-[var(--border-subtle)]/70 flex flex-wrap items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onclick={() => onOpenShare(sessionTitle || 'Snapshot AGY', msg.content, messages)}
-                        class="px-2 py-0.5 rounded-lg border bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--accent-fg)] hover:border-[var(--border-strong)] text-[11px] font-medium flex items-center gap-1.5 transition-all active:scale-95"
-                        title="Compartilhar / Exportar snapshot"
-                      >
-                        <Icon name="share" size={12} />
-                        <span>Compartilhar</span>
-                      </button>
-                    </div>
-                  {/if}
+                <img
+                  src="/static/icon.svg"
+                  class="w-12 h-12 sm:w-14 sm:h-14 rounded-xl"
+                  alt="AGY Logo"
+                />
+              </Card>
+
+              <h1
+                class="text-base sm:text-lg font-bold tracking-tight text-foreground text-balance"
+              >
+                Antigravity Mobile Gateway
+              </h1>
+              <p
+                class="text-xs sm:text-[13px] text-muted-foreground mt-1.5 max-w-sm leading-relaxed text-balance"
+              >
+                Svelte 5 + SSE resumível. Controle Gemini 4 Hydrogen, Extra, Ollama
+                local, Inbox/Outbox e Terminal Web no celular ou desktop.
+              </p>
+
+              <div
+                class="mt-5 flex flex-wrap items-center justify-center gap-1.5 max-w-full"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => runSlashCommand("/status")}
+                >
+                  <Icon name="cpu" size={13} class="text-accent-foreground" />
+                  <span>Status</span>
+                  <Kbd class="hidden sm:inline-flex">/status</Kbd>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => runSlashCommand("/diff")}
+                >
+                  <Icon name="columns" size={13} class="text-accent-foreground" />
+                  <span>Git diff</span>
+                  <Kbd class="hidden sm:inline-flex">/diff</Kbd>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => runSlashCommand("/usage")}
+                >
+                  <Icon name="sparkles" size={13} class="text-accent-foreground" />
+                  <span>Cota</span>
+                </Button>
+                {#if features.terminal}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onclick={onOpenTerminal}
+                  >
+                    <Icon name="terminal" size={13} class="text-emerald-500" />
+                    <span>Terminal</span>
+                  </Button>
                 {/if}
               </div>
-            {/if}
+            </div>
           </div>
-        {/each}
-      {/if}
-    </div>
-  </main>
+        {:else}
+          {#each messages as msg, i}
+            {@const isActiveBubble =
+              isGenerating && i === messages.length - 1 && msg.role === "agent"}
+            <div
+              class="flex {msg.role === 'user'
+                ? 'justify-end'
+                : 'justify-start'} min-w-0 animate-msg-in"
+            >
+              {#if msg.role === "user"}
+                <div
+                  class="max-w-[85%] sm:max-w-[78%] rounded-2xl rounded-br-sm bg-radial-[at_52%_-52%] from-primary/85 to-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ring-1 ring-primary/30 theme-surface"
+                >
+                  {msg.content}
+                </div>
+              {:else}
+                <Card
+                  class="max-w-[96%] sm:max-w-[93%] min-w-0 rounded-2xl rounded-bl-sm px-4 py-3.5 {isSplitView
+                    ? 'sm:px-4 sm:py-3.5'
+                    : 'sm:px-6 sm:py-5'}"
+                >
+                  {#if isActiveBubble && !msg.content.trim()}
+                    <div
+                      class="flex items-center gap-2.5 py-0.5 min-w-[205px] sm:min-w-[240px]"
+                    >
+                      <AiSpinner size={20} class="text-accent-foreground" />
+                      <div class="min-w-0 flex-1 space-y-1.5">
+                        <div class="flex items-center justify-between gap-2.5">
+                          <span
+                            class="text-xs font-medium text-secondary-foreground truncate"
+                          >
+                            {liveStatus || "Processando solicitação..."}
+                          </span>
+                          <span
+                            class="text-[10px] font-mono font-semibold text-accent-foreground shrink-0"
+                          >
+                            {Math.round(jobProgress)}%
+                          </span>
+                        </div>
+                        <div
+                          class="w-full h-1.5 rounded-full progress-track overflow-hidden"
+                        >
+                          <div
+                            class="h-full rounded-full progress-fill"
+                            style="width: {jobProgress}%;"
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
+                  {:else}
+                    <div
+                      class="markdown-body {isActiveBubble
+                        ? 'typing-cursor'
+                        : ''}"
+                    >
+                      {@html renderMarkdown(msg.content)}
+                    </div>
+                    {#if isActiveBubble}
+                      <div
+                        class="mt-2.5 pt-2 border-t border-border space-y-1.5 text-[11px] text-muted-foreground"
+                      >
+                        <div class="flex items-center justify-between gap-3">
+                          <div class="flex items-center gap-2 min-w-0">
+                            <AiSpinner
+                              size={14}
+                              class="text-accent-foreground"
+                            />
+                            <span class="truncate"
+                              >{liveStatus || "Gerando resposta..."}</span
+                            >
+                          </div>
+                          <span
+                            class="font-mono text-muted-foreground/80 shrink-0"
+                          >
+                            {Math.round(jobProgress)}% · {liveElapsed}s
+                          </span>
+                        </div>
+                        <div
+                          class="w-full h-1 rounded-full progress-track overflow-hidden"
+                        >
+                          <div
+                            class="h-full rounded-full progress-fill"
+                            style="width: {jobProgress}%;"
+                          ></div>
+                        </div>
+                      </div>
+                    {:else if msg.content.trim()}
+                      <div
+                        class="mt-4 pt-2.5 border-t border-border/70 flex flex-wrap items-center justify-end gap-1.5"
+                      >
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onclick={() => copyAgentMessage(i, msg.content)}
+                          title="Copiar resposta em Markdown"
+                        >
+                          <Icon name={copiedMsgIdx === i ? "check" : "clipboard"} size={12} />
+                          <span>{copiedMsgIdx === i ? "Copiado" : "Copiar"}</span>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onclick={() =>
+                            onOpenShare(
+                              sessionTitle || "Snapshot AGY",
+                              msg.content,
+                              messages,
+                            )}
+                          title="Compartilhar / Exportar snapshot"
+                        >
+                          <Icon name="share" size={12} />
+                          <span>Compartilhar</span>
+                        </Button>
+                      </div>
+                    {/if}
+                  {/if}
+                </Card>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </main>
 
     {#if showScrollBottomBtn}
-      <button
-        type="button"
-        data-scroll-bottom
+      <div
         transition:fly={{ y: 10, duration: 160, easing: cubicOut }}
-        onclick={() => {
-          scrollToBottom();
-          showScrollBottomBtn = false;
-        }}
-        class="absolute bottom-3 right-3 max-w-[calc(100%-1.5rem)] z-20 px-3 py-1.5 rounded-full bg-[var(--bg-elevated)] hover:bg-[var(--bg-input)] border border-[var(--accent-border)] text-[var(--accent-fg)] shadow-lg backdrop-blur-sm text-xs font-medium flex items-center gap-1.5 whitespace-nowrap"
-        title="Ir para o fim da conversa"
+        class="absolute bottom-3 right-3 max-w-[calc(100%-1.5rem)] z-20"
       >
-        <Icon name="chevron-down" size={14} />
-        <span>Fim da conversa</span>
-      </button>
+        <Button
+          variant="outline"
+          size="sm"
+          data-scroll-bottom
+          onclick={() => {
+            scrollToBottom();
+            showScrollBottomBtn = false;
+          }}
+          class="border-[var(--accent-border)] text-accent-foreground shadow-lg backdrop-blur-md"
+          title="Ir para o fim da conversa"
+        >
+          <Icon name="chevron-down" size={14} />
+          <span>Fim da conversa</span>
+        </Button>
+      </div>
     {/if}
   </div>
 
   <!-- Centered Bottom Dock (HITL Card + Slash Palette + Composer Card) -->
-  <div class="w-full px-2.5 {isSplitView ? 'sm:px-3 pb-2.5' : 'sm:px-6 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-4'} pt-1 shrink-0">
-    <div class="{isSplitView ? 'w-full' : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} space-y-2">
+  <div
+    class="w-full px-2.5 {isSplitView
+      ? 'sm:px-3 pb-2.5'
+      : 'sm:px-6 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-4'} pt-1 shrink-0"
+  >
+    <div
+      class="{isSplitView
+        ? 'w-full'
+        : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} space-y-2"
+    >
       <!-- Interactive HITL Approval Card -->
       {#if approvalNeeded}
-        <div
-          transition:fly={{ y: 12, duration: 180, easing: cubicOut }}
-          class="p-3 rounded-2xl bg-amber-500/12 border border-amber-500/40 text-[var(--text-primary)] space-y-2"
-        >
-          <div class="flex items-center justify-between gap-2 text-xs font-semibold text-amber-500">
-            <div class="flex items-center gap-1.5">
-              <Icon name="shield" size={15} />
-              <span>Aprovação HITL Necessária ({approvalNeeded.tool})</span>
-            </div>
-          </div>
-          {#if approvalNeeded.command}
-            <pre class="bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-lg p-2 text-[11px] font-mono text-[var(--text-primary)] overflow-x-auto">{approvalNeeded.command}</pre>
-          {/if}
-          <div class="flex items-center gap-2">
-            {#if features.terminal}
-              <button
-                type="button"
-                onclick={async () => {
-                  if (approvalNeeded?.command) {
-                    await navigator.clipboard.writeText(approvalNeeded.command).catch(() => {});
-                  }
-                  onOpenTerminal();
-                }}
-                class="flex-1 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95"
-              >
-                <Icon name="terminal" size={14} />
-                <span>Copiar & Abrir Terminal</span>
-              </button>
-            {/if}
-            <button
-              type="button"
-              onclick={handleCancelActiveJob}
-              class="py-1.5 px-3 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/40 text-xs font-semibold transition-all active:scale-95"
+        <div transition:fly={{ y: 12, duration: 180, easing: cubicOut }}>
+          <Card class="p-3 bg-amber-500/10 border-amber-500/40 space-y-2">
+            <div
+              class="flex items-center justify-between gap-2 text-xs font-semibold text-amber-500"
             >
-              Rejeitar
-            </button>
-          </div>
+              <div class="flex items-center gap-1.5">
+                <Icon name="shield" size={15} />
+                <span>Aprovação HITL Necessária ({approvalNeeded.tool})</span>
+              </div>
+              <Badge variant="amber" size="xs">HITL</Badge>
+            </div>
+            {#if approvalNeeded.command}
+              <pre
+                class="bg-muted border border-border rounded-xl p-2.5 text-[11px] font-mono text-foreground overflow-x-auto">{approvalNeeded.command}</pre>
+            {/if}
+            <div class="flex items-center gap-2">
+              {#if features.terminal}
+                <Button
+                  size="sm"
+                  onclick={async () => {
+                    if (approvalNeeded?.command) {
+                      await navigator.clipboard
+                        .writeText(approvalNeeded.command)
+                        .catch(() => {});
+                    }
+                    onOpenTerminal();
+                  }}
+                  class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500"
+                >
+                  <Icon name="terminal" size={14} />
+                  <span>Copiar & Abrir Terminal</span>
+                </Button>
+              {/if}
+              <Button
+                variant="destructive"
+                size="sm"
+                onclick={handleCancelActiveJob}
+              >
+                Rejeitar
+              </Button>
+            </div>
+          </Card>
         </div>
       {/if}
 
       <!-- Slash Commands Palette -->
-      {#if slashMenuOpen || userInput.startsWith('/')}
-        <div
-          transition:fly={{ y: 8, duration: 150, easing: cubicOut }}
-          class="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-2xl p-1.5 space-y-1 max-h-48 overflow-y-auto"
-          style="box-shadow: var(--shadow-popover);"
-        >
-          {#each slashCommands.filter((c) => !userInput.startsWith('/') || c.cmd.startsWith(userInput.trim().toLowerCase())) as item}
-            <button
-              type="button"
-              onclick={() => runSlashCommand(item.cmd)}
-              class="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-[var(--bg-chip)] flex items-center justify-between gap-2 text-xs transition-colors"
-            >
-              <span class="font-mono font-semibold text-[var(--accent-fg)]">{item.cmd}</span>
-              <span class="text-[var(--text-muted)] text-[11px] truncate">{item.desc}</span>
-            </button>
-          {/each}
+      {#if slashMenuOpen || userInput.startsWith("/")}
+        <div transition:fly={{ y: 8, duration: 150, easing: cubicOut }}>
+          <Card
+            variant="mixed"
+            class="p-1.5 space-y-1 max-h-48 overflow-y-auto shadow-xl"
+          >
+            {#each slashCommands.filter((c) => !userInput.startsWith("/") || c.cmd.startsWith(userInput
+                    .trim()
+                    .toLowerCase())) as item}
+              <button
+                type="button"
+                onclick={() => runSlashCommand(item.cmd)}
+                class="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-secondary/80 flex items-center justify-between gap-2 text-xs transition-colors"
+              >
+                <Kbd class="text-accent-foreground border-[var(--accent-border)] bg-accent/60 px-1.5">{item.cmd}</Kbd>
+                <span class="text-muted-foreground text-[11px] truncate"
+                  >{item.desc}</span
+                >
+              </button>
+            {/each}
+          </Card>
         </div>
       {/if}
 
       <!-- Composer Card -->
-      <footer
-        class="rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] overflow-hidden theme-surface"
-        style="box-shadow: var(--shadow-card);"
-      >
-        {#if isGenerating && liveStatus}
-          <div
-            transition:fly={{ y: 6, duration: 150, easing: cubicOut }}
-            class="bg-[var(--bg-input)] border-b border-[var(--border-subtle)] theme-surface"
-          >
-            <div class="w-full h-[3px] progress-track overflow-hidden">
-              <div
-                class="h-full progress-fill"
-                style="width: {jobProgress}%;"
-              ></div>
-            </div>
-            <div class="px-3 py-1.5 flex items-center justify-between text-[11px] text-[var(--accent-fg)] font-mono">
-              <div class="flex items-center gap-2 min-w-0">
-                <AiSpinner size={14} class="text-[var(--accent-fg)]" />
-                <span class="truncate">{liveStatus}</span>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <span class="text-[var(--text-secondary)] font-semibold">{Math.round(jobProgress)}%</span>
-                <span class="text-[var(--text-faint)]">{liveElapsed}s</span>
-                <button
-                  type="button"
-                  onclick={handleCancelActiveJob}
-                  class="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-400 border border-rose-500/35 hover:bg-rose-500/25 text-[10px] font-semibold flex items-center gap-1 transition-all active:scale-95"
-                >
-                  <Icon name="stop" size={10} />
-                  <span>Cancelar</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        {/if}
-
-        <div class="p-2 sm:p-2.5 space-y-2">
-          <!-- Compact Model, Permission & Quick Actions Bar -->
-          <div class="flex flex-wrap items-center justify-between gap-1.5">
-            <div class="flex items-center gap-1.5 min-w-0 flex-1 sm:flex-initial">
-              <select
-                value={selectedModel}
-                onchange={(e) => {
-                  userTouchedModel = true;
-                  selectedModel = (e.target as HTMLSelectElement).value;
-                }}
-                class="min-w-0 flex-1 sm:flex-none {isSplitView ? 'sm:w-40' : 'sm:w-52'} bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-[11px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-fg)] truncate transition-colors"
-              >
-                {#each models as m}
-                  <option value={m.id}>{m.name} ({m.badge})</option>
-                {/each}
-              </select>
-
-              <select
-                value={permissionMode}
-                onchange={(e) => {
-                  userTouchedPerm = true;
-                  permissionMode = (e.target as HTMLSelectElement).value as PermissionMode;
-                }}
-                class="bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-[11px] font-medium focus:outline-none focus:border-[var(--accent-fg)] shrink-0 transition-colors {permissionMode === 'autonomous' ? 'text-amber-500 border-amber-500/40' : permissionMode === 'readonly' ? 'text-[var(--accent-fg)]' : 'text-emerald-500'}"
-              >
-                <option value="copilot">Copiloto</option>
-                <option value="autonomous">Autônomo</option>
-                <option value="readonly">Leitura</option>
-              </select>
-            </div>
-
-            <div class="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onclick={() => (slashMenuOpen = !slashMenuOpen)}
-                class="px-2 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-all active:scale-95 {slashMenuOpen ? 'bg-[var(--accent-solid)] border-[var(--accent-solid)] text-[var(--accent-on-solid)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--accent-fg)] hover:border-[var(--border-strong)]'}"
-                title="Comandos Slash (/)"
-              >
-                <span class="font-mono font-semibold">/</span>
-                <span>Comandos</span>
-              </button>
-
-              <input
-                bind:this={fileInputEl}
-                type="file"
-                multiple
-                onchange={handleFilesSelected}
-                class="hidden"
-              />
-              <button
-                type="button"
-                onclick={() => fileInputEl?.click()}
-                disabled={uploading}
-                class="px-2 py-1 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] hover:border-[var(--border-strong)] text-[11px] font-medium flex items-center gap-1 transition-all active:scale-95"
-                title="Anexar arquivo ou foto"
-              >
-                <Icon name="paperclip" size={13} />
-                <span>Anexar</span>
-              </button>
-
-              {#if showVoiceButton || (Boolean(features.whisper) && hasMediaRecorder)}
-                <button
-                  type="button"
-                  onclick={toggleVoice}
-                  disabled={transcribingVoice}
-                  class="px-2 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50 {isListening ? 'bg-rose-600 border-rose-600 text-white animate-pulse' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] hover:border-[var(--border-strong)]'}"
-                  title="Ditado por voz (requer HTTPS / localhost)"
-                >
-                  <Icon name="mic" size={13} />
-                  <span>{transcribingVoice ? 'Transcrevendo...' : isListening ? 'Ouvindo...' : 'Voz'}</span>
-                </button>
-              {/if}
-
-            </div>
-          </div>
-
-          {#if voiceNotice}
+      <footer>
+        <Card variant="mixed" class="overflow-hidden shadow-lg">
+          {#if isGenerating && liveStatus}
             <div
-              transition:fade={{ duration: 140 }}
-              class="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/35 text-[11px] text-amber-300"
+              transition:fly={{ y: 6, duration: 150, easing: cubicOut }}
+              class="bg-muted border-b border-border theme-surface"
             >
-              <span class="break-words">{voiceNotice}</span>
-              <button
-                type="button"
-                onclick={() => (voiceNotice = '')}
-                class="text-amber-300/80 hover:text-amber-200 shrink-0"
-                aria-label="Fechar aviso de voz"
+              <div class="w-full h-[3px] progress-track overflow-hidden">
+                <div
+                  class="h-full progress-fill"
+                  style="width: {jobProgress}%;"
+                ></div>
+              </div>
+              <div
+                class="px-3 py-1.5 flex items-center justify-between text-[11px] text-accent-foreground font-mono"
               >
-                <Icon name="close" size={12} />
-              </button>
-            </div>
-          {/if}
-
-          <!-- Attached File Chips -->
-          {#if attachedFiles.length > 0}
-            <div class="flex flex-wrap gap-1.5">
-              {#each attachedFiles as f, idx}
-                <span
-                  transition:fade={{ duration: 140 }}
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[11px] text-[var(--accent-fg)]"
-                >
-                  <Icon name="file" size={11} />
-                  <span class="max-w-[130px] truncate">{f.name}</span>
-                  <button
-                    type="button"
-                    onclick={() => (attachedFiles = attachedFiles.filter((_, k) => k !== idx))}
-                    class="text-[var(--text-muted)] hover:text-rose-400 transition-colors"
+                <div class="flex items-center gap-2 min-w-0">
+                  <AiSpinner size={14} class="text-accent-foreground" />
+                  <span class="truncate">{liveStatus}</span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-secondary-foreground font-semibold"
+                    >{Math.round(jobProgress)}%</span
                   >
-                    <Icon name="close" size={11} />
-                  </button>
-                </span>
-              {/each}
+                  <span class="text-muted-foreground">{liveElapsed}s</span>
+                  <Button
+                    variant="destructive"
+                    size="xs"
+                    onclick={handleCancelActiveJob}
+                    class="h-5 px-2 text-[10px]"
+                  >
+                    <Icon name="stop" size={10} />
+                    <span>Cancelar</span>
+                  </Button>
+                </div>
+              </div>
             </div>
           {/if}
 
-          <!-- Main Input Form -->
-          <form onsubmit={handleSubmit} class="flex items-end gap-1.5">
-            <textarea
-              bind:this={textareaEl}
-              bind:value={userInput}
-              rows={1}
-              placeholder={uploading ? 'Enviando arquivo...' : gatewayMode === 'standalone' ? 'Digite uma instrução...' : `Instrução para ${hostLabel}...`}
-              onfocus={() => setTimeout(scrollToBottom, 180)}
-              oninput={(e) => {
-                const el = e.currentTarget;
-                el.style.height = 'auto';
-                el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-              }}
-              onkeydown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  if (window.matchMedia?.('(pointer: coarse)').matches) return;
-                  e.preventDefault();
-                  handleSubmit();
-                }
-              }}
-              class="flex-1 bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-base sm:text-sm leading-5 text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] resize-none overflow-y-auto max-h-[120px] transition-colors"
-            ></textarea>
+          <div class="p-2 sm:p-2.5 space-y-2">
+            <!-- Compact Model, Permission & Quick Actions Bar -->
+            <div class="flex flex-wrap items-center justify-between gap-1.5">
+              <div
+                class="flex items-center gap-1.5 min-w-[210px] flex-1 sm:flex-initial"
+              >
+                <select
+                  value={selectedModel}
+                  onchange={(e) => {
+                    userTouchedModel = true;
+                    selectedModel = (e.target as HTMLSelectElement).value;
+                  }}
+                  class="min-w-[120px] flex-1 sm:flex-none {isSplitView
+                    ? 'sm:w-40'
+                    : 'sm:w-52'} bg-muted border border-border rounded-full px-2.5 py-1 text-[11px] text-foreground focus:outline-none focus:border-ring truncate transition-colors"
+                >
+                  {#each models as m}
+                    <option value={m.id}>{m.name} ({m.badge})</option>
+                  {/each}
+                </select>
 
-            {#if isGenerating && activeJobId}
-              <button
-                type="button"
-                onclick={handleCancelActiveJob}
-                class="p-2 sm:p-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shrink-0 transition-all active:scale-95"
-                title="Cancelar execução"
-                aria-label="Cancelar"
+                <select
+                  value={permissionMode}
+                  onchange={(e) => {
+                    userTouchedPerm = true;
+                    permissionMode = (e.target as HTMLSelectElement)
+                      .value as PermissionMode;
+                  }}
+                  class="bg-muted border border-border rounded-full px-2.5 py-1 text-[11px] font-medium focus:outline-none focus:border-ring shrink-0 transition-colors {permissionMode ===
+                  'autonomous'
+                    ? 'text-amber-500 border-amber-500/40'
+                    : permissionMode === 'readonly'
+                      ? 'text-accent-foreground'
+                      : 'text-emerald-500'}"
+                >
+                  <option value="copilot">Copiloto</option>
+                  <option value="autonomous">Autônomo</option>
+                  <option value="readonly">Leitura</option>
+                </select>
+              </div>
+
+              <div class="flex items-center gap-1 shrink-0">
+                <Button
+                  variant={slashMenuOpen ? "default" : "outline"}
+                  size="xs"
+                  onclick={() => (slashMenuOpen = !slashMenuOpen)}
+                  class={!slashMenuOpen ? "text-accent-foreground" : ""}
+                  title="Comandos Slash (/)"
+                >
+                  <span class="font-mono font-semibold">/</span>
+                  <span>Comandos</span>
+                </Button>
+
+                <input
+                  bind:this={fileInputEl}
+                  type="file"
+                  multiple
+                  onchange={handleFilesSelected}
+                  class="hidden"
+                />
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onclick={() => fileInputEl?.click()}
+                  disabled={uploading}
+                  title="Anexar arquivo ou foto"
+                >
+                  <Icon name="paperclip" size={12} />
+                  <span>Anexar</span>
+                </Button>
+
+                {#if showVoiceButton || (Boolean(features.whisper) && hasMediaRecorder)}
+                  <Button
+                    variant={isListening ? "destructiveSolid" : "outline"}
+                    size="xs"
+                    onclick={toggleVoice}
+                    disabled={transcribingVoice}
+                    class={isListening ? "animate-pulse" : ""}
+                    title="Ditado por voz (requer HTTPS / localhost)"
+                  >
+                    <Icon name="mic" size={12} />
+                    <span
+                      >{transcribingVoice
+                        ? "Transcrevendo..."
+                        : isListening
+                          ? "Ouvindo..."
+                          : "Voz"}</span
+                    >
+                  </Button>
+                {/if}
+              </div>
+            </div>
+
+            {#if voiceNotice}
+              <div
+                transition:fade={{ duration: 140 }}
+                class="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/35 text-[11px] text-amber-300"
               >
-                <Icon name="stop" size={18} />
-              </button>
-            {:else}
-              <button
-                type="submit"
-                disabled={isGenerating || (!userInput.trim() && attachedFiles.length === 0)}
-                class="p-2 sm:p-2.5 rounded-xl bg-[var(--accent-solid)] hover:bg-[var(--accent-hover)] disabled:opacity-40 text-[var(--accent-on-solid)] shrink-0 transition-all active:scale-95"
-                aria-label="Enviar"
-              >
-                <Icon name="send" size={18} />
-              </button>
+                <span class="break-words">{voiceNotice}</span>
+                <button
+                  type="button"
+                  onclick={() => (voiceNotice = "")}
+                  class="text-amber-300/80 hover:text-amber-200 shrink-0"
+                  aria-label="Fechar aviso de voz"
+                >
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
             {/if}
-          </form>
-        </div>
+
+            <!-- Attached File Chips -->
+            {#if attachedFiles.length > 0}
+              <div class="flex flex-wrap gap-1.5">
+                {#each attachedFiles as f, idx}
+                  <Badge variant="accent" size="sm" class="gap-1.5 pr-1">
+                    <Icon name="file" size={11} />
+                    <span class="max-w-[130px] truncate">{f.name}</span>
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (attachedFiles = attachedFiles.filter(
+                          (_, k) => k !== idx,
+                        ))}
+                      class="rounded-full p-0.5 text-muted-foreground hover:text-rose-400 transition-colors"
+                    >
+                      <Icon name="close" size={10} />
+                    </button>
+                  </Badge>
+                {/each}
+              </div>
+            {/if}
+
+            <!-- Main Input Form -->
+            <form onsubmit={handleSubmit} class="flex items-end gap-1.5">
+              <Textarea
+                bind:ref={textareaEl}
+                bind:value={userInput}
+                rows={1}
+                placeholder={uploading
+                  ? "Enviando arquivo..."
+                  : gatewayMode === "standalone"
+                    ? "Digite uma instrução..."
+                    : `Instrução para ${hostLabel}...`}
+                onfocus={() => setTimeout(scrollToBottom, 180)}
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLTextAreaElement;
+                  el.style.height = "auto";
+                  el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+                }}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    if (window.matchMedia?.("(pointer: coarse)").matches) return;
+                    e.preventDefault();
+                    handleSubmit();
+                  }
+                }}
+                class="flex-1 min-h-0 resize-none overflow-y-auto max-h-[120px] py-2 leading-5"
+              />
+
+              {#if isGenerating && activeJobId}
+                <Button
+                  variant="destructiveSolid"
+                  size="icon"
+                  onclick={handleCancelActiveJob}
+                  class="rounded-xl shrink-0"
+                  title="Cancelar execução"
+                  aria-label="Cancelar"
+                >
+                  <Icon name="stop" size={17} />
+                </Button>
+              {:else}
+                <Button
+                  type="submit"
+                  variant="default"
+                  size="icon"
+                  disabled={isGenerating ||
+                    (!userInput.trim() && attachedFiles.length === 0)}
+                  class="rounded-xl shrink-0"
+                  aria-label="Enviar"
+                >
+                  <Icon name="send" size={17} />
+                </Button>
+              {/if}
+            </form>
+          </div>
+        </Card>
       </footer>
     </div>
   </div>

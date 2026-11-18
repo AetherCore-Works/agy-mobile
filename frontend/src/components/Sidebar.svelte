@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { untrack, type Component } from 'svelte';
-  import { fade, fly } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
-  import Icon from './Icon.svelte';
-  import { loadOptionalCockpitPanel } from '../lib/optionalCockpit';
+  import { untrack, type Component } from "svelte";
+  import { fade, fly } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+  import Icon from "./Icon.svelte";
+  import { Button } from "../lib/components/ui/button/index.js";
+  import { Card } from "../lib/components/ui/card/index.js";
+  import { Badge } from "../lib/components/ui/badge/index.js";
+  import { Input } from "../lib/components/ui/input/index.js";
+  import { Tabs, TabsList, TabsTrigger } from "../lib/components/ui/tabs/index.js";
+  import { loadOptionalCockpitPanel } from "../lib/optionalCockpit";
   import {
     deleteConversation,
     fetchConversations,
@@ -17,8 +22,12 @@
     type PermissionMode,
     type TelemetryData,
     type WatchdogState,
-  } from '../lib/api';
-  import { THEME_PALETTES, type ThemeMode, type ThemePalette } from '../lib/theme';
+  } from "../lib/api";
+  import {
+    THEME_PALETTES,
+    type ThemeMode,
+    type ThemePalette,
+  } from "../lib/theme";
 
   let {
     open = $bindable(false),
@@ -59,41 +68,47 @@
   let CockpitComp = $state<Component<{ active?: boolean }> | null>(null);
   let cockpitLoadAttempted = $state(false);
 
-  let activeTab = $state<'chats' | 'settings'>('chats');
+  let activeTab = $state<"chats" | "settings">("chats");
   let conversations = $state<ConversationSummary[]>([]);
   let availableTags = $state<string[]>([]);
-  let searchQuery = $state('');
-  let engineFilter = $state<'' | 'agy' | 'ollama'>('');
-  let tagFilter = $state('');
+  let searchQuery = $state("");
+  let engineFilter = $state<"" | "agy" | "ollama">("");
+  let tagFilter = $state("");
   let loading = $state(false);
   let hasMore = $state(false);
   let offset = $state(0);
   let savingSettings = $state(false);
-  let settingsSavedMsg = $state('');
+  let settingsSavedMsg = $state("");
   let watchdog = $state<WatchdogState | null>(null);
   let telemetry = $state<TelemetryData | null>(null);
 
   // Inline session organization editor state
   let editingId = $state<string | null>(null);
-  let editTitle = $state('');
-  let editTag = $state('');
-  let editTagColor = $state('');
+  let editTitle = $state("");
+  let editTag = $state("");
+  let editTagColor = $state("");
   let savingMeta = $state(false);
   let confirmDeleteId = $state<string | null>(null);
   let deletingId = $state<string | null>(null);
-  let deleteError = $state('');
+  let deleteError = $state("");
 
   const PAGE_SIZE = 30;
 
   function resolveTagSwatch(colorId?: string): string {
-    return THEME_PALETTES.find((p) => p.id === colorId)?.swatch ?? '#71717a';
+    return THEME_PALETTES.find((p) => p.id === colorId)?.swatch ?? "#71717a";
   }
 
   async function load(reset = true) {
     loading = true;
     try {
       const nextOffset = reset ? 0 : offset;
-      const data = await fetchConversations(searchQuery, PAGE_SIZE, nextOffset, engineFilter, tagFilter);
+      const data = await fetchConversations(
+        searchQuery,
+        PAGE_SIZE,
+        nextOffset,
+        engineFilter,
+        tagFilter,
+      );
       if (reset) {
         conversations = data.conversations;
       } else {
@@ -115,13 +130,13 @@
     searchTimer = setTimeout(() => load(true), 250);
   }
 
-  function setEngineFilter(next: '' | 'agy' | 'ollama') {
+  function setEngineFilter(next: "" | "agy" | "ollama") {
     engineFilter = next;
     load(true);
   }
 
   function toggleTagFilter(tag: string) {
-    tagFilter = tagFilter.toLowerCase() === tag.toLowerCase() ? '' : tag;
+    tagFilter = tagFilter.toLowerCase() === tag.toLowerCase() ? "" : tag;
     load(true);
   }
 
@@ -134,15 +149,15 @@
   function startEdit(e: MouseEvent, c: ConversationSummary) {
     e.stopPropagation();
     confirmDeleteId = null;
-    deleteError = '';
+    deleteError = "";
     if (editingId === c.id) {
       editingId = null;
       return;
     }
     editingId = c.id;
-    editTitle = c.custom_title || c.title || '';
-    editTag = c.tag || '';
-    editTagColor = c.tag_color || '';
+    editTitle = c.custom_title || c.title || "";
+    editTag = c.tag || "";
+    editTagColor = c.tag_color || "";
   }
 
   async function saveEdit(e: Event, c: ConversationSummary) {
@@ -152,7 +167,7 @@
       await updateConversationMeta(c.id, {
         custom_title: editTitle.trim(),
         tag: editTag.trim(),
-        tag_color: editTag.trim() ? (editTagColor || 'sky') : '',
+        tag_color: editTag.trim() ? editTagColor || "sky" : "",
       });
       editingId = null;
       await load(true);
@@ -164,14 +179,14 @@
   function requestDelete(e: MouseEvent, id: string) {
     e.stopPropagation();
     editingId = null;
-    deleteError = '';
+    deleteError = "";
     confirmDeleteId = confirmDeleteId === id ? null : id;
   }
 
   async function confirmDelete(e: MouseEvent, id: string) {
     e.stopPropagation();
     deletingId = id;
-    deleteError = '';
+    deleteError = "";
     try {
       await deleteConversation(id);
       confirmDeleteId = null;
@@ -179,7 +194,7 @@
       onConversationDeleted?.(id);
       await load(true);
     } catch (err: any) {
-      deleteError = err?.message || 'Falha ao apagar sessão';
+      deleteError = err?.message || "Falha ao apagar sessão";
     } finally {
       deletingId = null;
     }
@@ -187,13 +202,13 @@
 
   async function saveSettingsPatch(patch: Partial<GatewaySettings>) {
     savingSettings = true;
-    settingsSavedMsg = '';
+    settingsSavedMsg = "";
     try {
       const updated = await updateSettings(patch);
       settings = updated;
       onSettingsSaved(updated);
-      settingsSavedMsg = 'Salvo permanentemente';
-      setTimeout(() => (settingsSavedMsg = ''), 2000);
+      settingsSavedMsg = "Salvo permanentemente";
+      setTimeout(() => (settingsSavedMsg = ""), 2000);
     } finally {
       savingSettings = false;
     }
@@ -205,14 +220,16 @@
     untrack(() => {
       if (!isOpen) {
         confirmDeleteId = null;
-        deleteError = '';
+        deleteError = "";
         return;
       }
-      if (tab === 'chats') {
+      if (tab === "chats") {
         load(true);
-      } else if (tab === 'settings') {
+      } else if (tab === "settings") {
         if (watchdogEnabled) {
-          fetchWatchdog().then((w) => (watchdog = w)).catch(() => {});
+          fetchWatchdog()
+            .then((w) => (watchdog = w))
+            .catch(() => {});
         }
         if (cockpitEnabled && !CockpitComp && !cockpitLoadAttempted) {
           cockpitLoadAttempted = true;
@@ -222,16 +239,38 @@
             })
             .catch(() => {});
         } else if (telemetryEnabled && !cockpitEnabled) {
-          fetchTelemetry().then((t) => (telemetry = t)).catch(() => {});
+          fetchTelemetry()
+            .then((t) => (telemetry = t))
+            .catch(() => {});
         }
       }
     });
   });
 
-  const permOptions: { value: PermissionMode; label: string; desc: string; icon: 'shield' | 'zap' | 'eye' }[] = [
-    { value: 'copilot', label: 'Copiloto', desc: 'Aprova edições (--mode accept-edits)', icon: 'shield' },
-    { value: 'autonomous', label: 'Autônomo', desc: 'Execução total sem bloqueios', icon: 'zap' },
-    { value: 'readonly', label: 'Leitura', desc: 'Somente planejamento (--mode plan)', icon: 'eye' },
+  const permOptions: {
+    value: PermissionMode;
+    label: string;
+    desc: string;
+    icon: "shield" | "zap" | "eye";
+  }[] = [
+    {
+      value: "copilot",
+      label: "Copiloto",
+      desc: "Aprova edições (--mode accept-edits)",
+      icon: "shield",
+    },
+    {
+      value: "autonomous",
+      label: "Autônomo",
+      desc: "Execução total sem bloqueios",
+      icon: "zap",
+    },
+    {
+      value: "readonly",
+      label: "Leitura",
+      desc: "Somente planejamento (--mode plan)",
+      icon: "eye",
+    },
   ];
 </script>
 
@@ -251,10 +290,14 @@
     class="fixed inset-y-0 left-0 w-80 max-w-[88vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-[var(--bg-elevated)] border-r border-[var(--border-subtle)] z-50 flex flex-col shadow-2xl select-none theme-surface"
   >
     <!-- Header -->
-    <div class="p-3.5 border-b border-[var(--border-subtle)] flex items-center justify-between">
+    <div
+      class="p-3.5 border-b border-[var(--border-subtle)] flex items-center justify-between"
+    >
       <div class="flex items-center gap-2">
         <Icon name="clock" size={17} class="text-[var(--accent-fg)]" />
-        <h2 class="text-sm font-bold text-[var(--text-primary)]">AGY Gateway</h2>
+        <h2 class="text-sm font-bold text-[var(--text-primary)]">
+          AGY Gateway
+        </h2>
       </div>
       <button
         type="button"
@@ -266,70 +309,83 @@
     </div>
 
     <!-- Tabs -->
-    <div class="grid grid-cols-2 border-b border-[var(--border-subtle)] bg-[var(--bg-input)] p-1 gap-1 theme-surface">
-      <button
-        type="button"
-        onclick={() => (activeTab = 'chats')}
-        class="py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all {activeTab === 'chats' ? 'bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-sm border border-[var(--border-subtle)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-      >
-        <Icon name="clock" size={14} />
-        <span>Sessões</span>
-      </button>
-      <button
-        type="button"
-        onclick={() => (activeTab = 'settings')}
-        class="py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all {activeTab === 'settings' ? 'bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-sm border border-[var(--border-subtle)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-      >
-        <Icon name="settings" size={14} />
-        <span>Configs</span>
-      </button>
-    </div>
+    <Tabs
+      value={activeTab}
+      onValueChange={(v) => (activeTab = v === "settings" ? "settings" : "chats")}
+      class="border-b border-border bg-muted/60 p-1.5 theme-surface"
+    >
+      <TabsList class="grid grid-cols-2 w-full bg-muted border-border">
+        <TabsTrigger value="chats">
+          <Icon name="clock" size={14} />
+          <span>Sessões</span>
+        </TabsTrigger>
+        <TabsTrigger value="settings">
+          <Icon name="settings" size={14} />
+          <span>Configs</span>
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
 
-    {#if activeTab === 'chats'}
-      <div class="p-3 border-b border-[var(--border-subtle)] space-y-2">
-        <button
-          type="button"
+    {#if activeTab === "chats"}
+      <div class="p-3 border-b border-border space-y-2">
+        <Button
+          variant="default"
           onclick={() => {
             onNewConversation();
             open = false;
           }}
-          class="w-full py-2 px-3 rounded-xl bg-[var(--accent-solid)] hover:bg-[var(--accent-hover)] text-[var(--accent-on-solid)] text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all active:scale-[0.98]"
+          class="w-full"
         >
           <Icon name="plus" size={15} />
           <span>Nova Conversa</span>
-        </button>
+        </Button>
 
         <div class="relative flex items-center">
-          <Icon name="search" size={14} class="absolute left-2.5 text-[var(--text-faint)] pointer-events-none" />
-          <input
+          <Icon
+            name="search"
+            size={14}
+            class="absolute left-2.5 text-muted-foreground pointer-events-none"
+          />
+          <Input
             type="text"
             bind:value={searchQuery}
             oninput={handleSearchInput}
             placeholder="Buscar (FTS5)..."
-            class="w-full bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent-fg)] transition-colors"
+            class="pl-8 pr-2.5 rounded-full"
           />
         </div>
 
         <!-- Engine Filter Pills -->
-        <div class="grid grid-cols-3 gap-1 p-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)]">
+        <div
+          class="grid grid-cols-3 gap-1 p-0.5 rounded-xl bg-muted border border-border"
+        >
           <button
             type="button"
-            onclick={() => setEngineFilter('')}
-            class="py-1 rounded-md text-[11px] font-semibold transition-all {engineFilter === '' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+            onclick={() => setEngineFilter("")}
+            class="py-1 rounded-lg text-[11px] font-semibold transition-all {engineFilter ===
+            ''
+              ? 'bg-card text-accent-foreground border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground'}"
           >
             Todos
           </button>
           <button
             type="button"
-            onclick={() => setEngineFilter('agy')}
-            class="py-1 rounded-md text-[11px] font-semibold transition-all {engineFilter === 'agy' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+            onclick={() => setEngineFilter("agy")}
+            class="py-1 rounded-lg text-[11px] font-semibold transition-all {engineFilter ===
+            'agy'
+              ? 'bg-card text-accent-foreground border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground'}"
           >
             AGY
           </button>
           <button
             type="button"
-            onclick={() => setEngineFilter('ollama')}
-            class="py-1 rounded-md text-[11px] font-semibold transition-all {engineFilter === 'ollama' ? 'bg-[var(--bg-elevated)] text-[var(--accent-fg)] border border-[var(--border-subtle)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+            onclick={() => setEngineFilter("ollama")}
+            class="py-1 rounded-lg text-[11px] font-semibold transition-all {engineFilter ===
+            'ollama'
+              ? 'bg-card text-accent-foreground border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground'}"
           >
             Local
           </button>
@@ -342,7 +398,10 @@
               <button
                 type="button"
                 onclick={() => toggleTagFilter(t)}
-                class="px-2 py-0.5 rounded-full border text-[10px] font-medium shrink-0 flex items-center gap-1 transition-all {tagFilter.toLowerCase() === t.toLowerCase() ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
+                class="px-2.5 py-0.5 rounded-full border text-[10px] font-medium shrink-0 flex items-center gap-1 transition-all {tagFilter.toLowerCase() ===
+                t.toLowerCase()
+                  ? 'bg-accent border-[var(--accent-border)] text-accent-foreground'
+                  : 'bg-muted border-border text-muted-foreground hover:border-input'}"
               >
                 <Icon name="tag" size={10} />
                 <span>{t}</span>
@@ -354,13 +413,19 @@
 
       <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
         {#if loading && conversations.length === 0}
-          <div class="text-center py-8 text-xs text-[var(--text-faint)]">Sincronizando sessões...</div>
+          <div class="text-center py-8 text-xs text-muted-foreground">
+            Sincronizando sessões...
+          </div>
         {:else if conversations.length === 0}
-          <div class="text-center py-8 text-xs text-[var(--text-faint)]">Nenhuma sessão encontrada.</div>
+          <div class="text-center py-8 text-xs text-muted-foreground">
+            Nenhuma sessão encontrada.
+          </div>
         {:else}
           {#each conversations as c}
-            <div
-              class="rounded-xl border transition-all {activeConvId === c.id ? 'bg-[var(--accent-soft)] border-[var(--accent-border)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]'}"
+            <Card
+              class="rounded-xl transition-all {activeConvId === c.id
+                ? 'bg-accent/70 border-[var(--accent-border)]'
+                : 'bg-muted/70 hover:border-input'}"
             >
               <div
                 role="button"
@@ -370,7 +435,7 @@
                   open = false;
                 }}
                 onkeydown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === "Enter") {
                     onSelectConversation(c.id, c.title);
                     open = false;
                   }
@@ -380,21 +445,48 @@
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-1.5">
                     {#if c.pinned}
-                      <Icon name="pin" size={12} class="text-[var(--accent-fg)] shrink-0" />
+                      <Icon
+                        name="pin"
+                        size={12}
+                        class="text-accent-foreground shrink-0"
+                      />
                     {/if}
-                    <span class="text-xs font-medium text-[var(--text-primary)] truncate">{c.title || 'Sem título'}</span>
+                    <span
+                      class="text-xs font-medium text-foreground truncate"
+                      >{c.title || "Sem título"}</span
+                    >
                   </div>
-                  <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-[var(--text-faint)]">
-                    <span class="px-1.5 py-0.5 rounded bg-[var(--bg-chip)] text-[var(--text-secondary)] font-mono">
-                      {c.engine === 'ollama' ? 'Local' : 'AGY'}
-                    </span>
+                  <div
+                    class="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-muted-foreground"
+                  >
+                    <Badge
+                      variant={c.engine === "ollama" ? "indigo" : "slate"}
+                      size="xs"
+                      class="font-mono"
+                    >
+                      {c.engine === "ollama" ? "Local" : "AGY"}
+                    </Badge>
                     {#if c.tag}
-                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
-                        <span class="w-1.5 h-1.5 rounded-full" style="background-color: {resolveTagSwatch(c.tag_color)};"></span>
+                      <Badge variant="outline" size="xs" class="gap-1">
+                        <span
+                          class="w-1.5 h-1.5 rounded-full"
+                          style="background-color: {resolveTagSwatch(
+                            c.tag_color,
+                          )};"
+                        ></span>
                         <span class="truncate max-w-[80px]">{c.tag}</span>
-                      </span>
+                      </Badge>
                     {/if}
-                    <span>{c.updated_at ? new Date(c.updated_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                    <span
+                      >{c.updated_at
+                        ? new Date(c.updated_at).toLocaleDateString("pt-BR", {
+                            day: "2-digit",
+                            month: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
+                        : ""}</span
+                    >
                   </div>
                 </div>
 
@@ -402,24 +494,31 @@
                   <button
                     type="button"
                     onclick={(e) => togglePin(e, c)}
-                    class="p-1 rounded transition-colors {c.pinned ? 'text-[var(--accent-fg)]' : 'text-[var(--text-faint)] hover:text-[var(--accent-fg)]'}"
-                    title={c.pinned ? 'Desafixar' : 'Fixar no topo'}
+                    class="p-1 rounded transition-colors {c.pinned
+                      ? 'text-[var(--accent-fg)]'
+                      : 'text-[var(--text-faint)] hover:text-[var(--accent-fg)]'}"
+                    title={c.pinned ? "Desafixar" : "Fixar no topo"}
                   >
                     <Icon name="pin" size={13} />
                   </button>
                   <button
                     type="button"
                     onclick={(e) => startEdit(e, c)}
-                    class="p-1 rounded transition-colors {editingId === c.id ? 'text-[var(--accent-fg)]' : 'text-[var(--text-faint)] hover:text-[var(--accent-fg)]'}"
+                    class="p-1 rounded transition-colors {editingId === c.id
+                      ? 'text-[var(--accent-fg)]'
+                      : 'text-[var(--text-faint)] hover:text-[var(--accent-fg)]'}"
                     title="Renomear / Etiqueta"
                   >
                     <Icon name="edit" size={13} />
                   </button>
-                  {#if c.engine === 'ollama' || c.engine === 'agy'}
+                  {#if c.engine === "ollama" || c.engine === "agy"}
                     <button
                       type="button"
                       onclick={(e) => requestDelete(e, c.id)}
-                      class="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all active:scale-95 {confirmDeleteId === c.id ? 'ring-2 ring-rose-300/60' : ''}"
+                      class="p-1 rounded transition-colors {confirmDeleteId ===
+                      c.id
+                        ? 'text-rose-400 bg-rose-500/15'
+                        : 'text-[var(--text-faint)] hover:text-rose-400 hover:bg-rose-500/10'}"
                       title="Apagar chat"
                     >
                       <Icon name="trash" size={13} />
@@ -429,8 +528,12 @@
               </div>
 
               {#if confirmDeleteId === c.id}
-                <div class="px-2.5 pb-2.5 pt-1.5 border-t border-rose-500/30 bg-rose-500/5 space-y-2 rounded-b-xl">
-                  <div class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                <div
+                  class="px-2.5 pb-2.5 pt-1.5 border-t border-rose-500/30 bg-rose-500/5 space-y-2 rounded-b-xl"
+                >
+                  <div
+                    class="text-[11px] text-[var(--text-secondary)] leading-snug"
+                  >
                     Apagar este chat permanentemente?
                   </div>
                   {#if deleteError}
@@ -443,7 +546,7 @@
                       onclick={(e) => {
                         e.stopPropagation();
                         confirmDeleteId = null;
-                        deleteError = '';
+                        deleteError = "";
                       }}
                       class="px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                     >
@@ -455,7 +558,7 @@
                       onclick={(e) => confirmDelete(e, c.id)}
                       class="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-[11px] font-semibold transition-colors"
                     >
-                      {deletingId === c.id ? 'Apagando...' : 'Apagar'}
+                      {deletingId === c.id ? "Apagando..." : "Apagar"}
                     </button>
                   </div>
                 </div>
@@ -489,7 +592,10 @@
                           type="button"
                           onclick={() => (editTagColor = p.id)}
                           aria-label={p.label}
-                          class="w-4 h-4 rounded-full flex items-center justify-center transition-transform {editTagColor === p.id ? 'scale-110 ring-2 ring-[var(--text-primary)]' : 'opacity-75 hover:opacity-100'}"
+                          class="w-4 h-4 rounded-full flex items-center justify-center transition-transform {editTagColor ===
+                          p.id
+                            ? 'scale-110 ring-2 ring-[var(--text-primary)]'
+                            : 'opacity-75 hover:opacity-100'}"
                           style="background-color: {p.swatch};"
                         ></button>
                       {/each}
@@ -508,12 +614,12 @@
                       disabled={savingMeta}
                       class="px-2.5 py-1 rounded-md bg-[var(--accent-solid)] text-[var(--accent-on-solid)] text-[11px] font-semibold"
                     >
-                      {savingMeta ? 'Salvando...' : 'Salvar'}
+                      {savingMeta ? "Salvando..." : "Salvar"}
                     </button>
                   </div>
                 </form>
               {/if}
-            </div>
+            </Card>
           {/each}
 
           {#if hasMore}
@@ -523,7 +629,7 @@
               disabled={loading}
               class="w-full py-2 rounded-lg bg-[var(--bg-chip)] hover:bg-[var(--bg-chip-hover)] text-xs text-[var(--text-secondary)] font-medium transition-colors"
             >
-              {loading ? 'Carregando...' : 'Carregar mais'}
+              {loading ? "Carregando..." : "Carregar mais"}
             </button>
           {/if}
         {/if}
@@ -534,23 +640,34 @@
         <!-- Appearance: Mode & Color Palette -->
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-[var(--text-secondary)]">Aparência</span>
-            <span class="text-[10px] font-mono text-[var(--text-faint)] uppercase">{themeMode === 'dark' ? 'Escuro' : 'Claro'}</span>
+            <span class="text-xs font-semibold text-[var(--text-secondary)]"
+              >Aparência</span
+            >
+            <span
+              class="text-[10px] font-mono text-[var(--text-faint)] uppercase"
+              >{themeMode === "dark" ? "Escuro" : "Claro"}</span
+            >
           </div>
 
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onclick={() => onThemeChange('dark', themePalette)}
-              class="p-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] {themeMode === 'dark' ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
+              onclick={() => onThemeChange("dark", themePalette)}
+              class="p-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] {themeMode ===
+              'dark'
+                ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]'
+                : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
             >
               <Icon name="moon" size={14} />
               <span>Escuro</span>
             </button>
             <button
               type="button"
-              onclick={() => onThemeChange('light', themePalette)}
-              class="p-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] {themeMode === 'light' ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
+              onclick={() => onThemeChange("light", themePalette)}
+              class="p-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] {themeMode ===
+              'light'
+                ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]'
+                : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
             >
               <Icon name="sun" size={14} />
               <span>Claro</span>
@@ -562,9 +679,15 @@
               <button
                 type="button"
                 onclick={() => onThemeChange(themeMode, p.id)}
-                class="px-2 py-1.5 rounded-xl border text-[11px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.97] {themePalette === p.id ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--text-primary)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
+                class="px-2 py-1.5 rounded-xl border text-[11px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.97] {themePalette ===
+                p.id
+                  ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--text-primary)]'
+                  : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
               >
-                <span class="w-3 h-3 rounded-full shrink-0 shadow-sm" style="background-color: {p.swatch};"></span>
+                <span
+                  class="w-3 h-3 rounded-full shrink-0 shadow-sm"
+                  style="background-color: {p.swatch};"
+                ></span>
                 <span class="truncate">{p.label}</span>
               </button>
             {/each}
@@ -572,23 +695,45 @@
         </div>
 
         <div>
-          <div class="block text-xs font-semibold text-[var(--text-secondary)] mb-2">Modo de Permissão Padrão</div>
+          <div
+            class="block text-xs font-semibold text-[var(--text-secondary)] mb-2"
+          >
+            Modo de Permissão Padrão
+          </div>
           <div class="space-y-2">
             {#each permOptions as opt}
               <button
                 type="button"
-                onclick={() => saveSettingsPatch({ default_permission_mode: opt.value })}
-                class="w-full text-left p-2.5 rounded-xl border transition-all flex items-start gap-2.5 active:scale-[0.99] {settings.default_permission_mode === opt.value ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--text-primary)]' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
+                onclick={() =>
+                  saveSettingsPatch({ default_permission_mode: opt.value })}
+                class="w-full text-left p-2.5 rounded-xl border transition-all flex items-start gap-2.5 active:scale-[0.99] {settings.default_permission_mode ===
+                opt.value
+                  ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--text-primary)]'
+                  : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'}"
               >
-                <Icon name={opt.icon} size={16} class={settings.default_permission_mode === opt.value ? 'text-[var(--accent-fg)] mt-0.5' : 'text-[var(--text-faint)] mt-0.5'} />
+                <Icon
+                  name={opt.icon}
+                  size={16}
+                  class={settings.default_permission_mode === opt.value
+                    ? "text-[var(--accent-fg)] mt-0.5"
+                    : "text-[var(--text-faint)] mt-0.5"}
+                />
                 <div class="min-w-0 flex-1">
-                  <div class="text-xs font-semibold flex items-center justify-between">
+                  <div
+                    class="text-xs font-semibold flex items-center justify-between"
+                  >
                     <span>{opt.label}</span>
                     {#if settings.default_permission_mode === opt.value}
-                      <Icon name="check" size={14} class="text-[var(--accent-fg)]" />
+                      <Icon
+                        name="check"
+                        size={14}
+                        class="text-[var(--accent-fg)]"
+                      />
                     {/if}
                   </div>
-                  <div class="text-[11px] text-[var(--text-faint)] mt-0.5">{opt.desc}</div>
+                  <div class="text-[11px] text-[var(--text-faint)] mt-0.5">
+                    {opt.desc}
+                  </div>
                 </div>
               </button>
             {/each}
@@ -596,11 +741,18 @@
         </div>
 
         <div>
-          <label for="cfg-default-model" class="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5">Modelo Padrão</label>
+          <label
+            for="cfg-default-model"
+            class="block text-xs font-semibold text-[var(--text-secondary)] mb-1.5"
+            >Modelo Padrão</label
+          >
           <select
             id="cfg-default-model"
             value={settings.default_model}
-            onchange={(e) => saveSettingsPatch({ default_model: (e.target as HTMLSelectElement).value })}
+            onchange={(e) =>
+              saveSettingsPatch({
+                default_model: (e.target as HTMLSelectElement).value,
+              })}
             class="w-full bg-[var(--bg-input)] border border-[var(--border-subtle)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-fg)]"
           >
             {#each models as m}
@@ -619,8 +771,13 @@
           </div>
         {/if}
 
-        <div class="pt-2 border-t border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)] space-y-1.5">
-          <p>As configurações ficam salvas no SQLite local do Gateway e sincronizam automaticamente entre sessões.</p>
+        <div
+          class="pt-2 border-t border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)] space-y-1.5"
+        >
+          <p>
+            As configurações ficam salvas no SQLite local do Gateway e
+            sincronizam automaticamente entre sessões.
+          </p>
           {#if savingSettings}
             <p class="text-[var(--accent-fg)]">Salvando...</p>
           {/if}
@@ -640,7 +797,9 @@
               <span>Automações Cron & Alertas</span>
             </div>
             {#if unreadAlerts > 0}
-              <span class="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+              <span
+                class="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold"
+              >
                 {unreadAlerts}
               </span>
             {:else}
@@ -650,20 +809,32 @@
         {/if}
 
         {#if watchdogEnabled && watchdog}
-          <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-1.5 theme-surface">
-            <div class="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]">
+          <div
+            class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-1.5 theme-surface"
+          >
+            <div
+              class="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]"
+            >
               <span>Watchdog</span>
-              <span class="px-1.5 py-0.5 rounded text-[10px] {watchdog.online ? 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/35' : 'bg-rose-500/15 text-rose-400 border border-rose-500/35'}">
-                {watchdog.online ? 'Online' : 'Offline'}
+              <span
+                class="px-1.5 py-0.5 rounded text-[10px] {watchdog.online
+                  ? 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/35'
+                  : 'bg-rose-500/15 text-rose-400 border border-rose-500/35'}"
+              >
+                {watchdog.online ? "Online" : "Offline"}
               </span>
             </div>
-            <div class="text-[11px] text-[var(--text-faint)] flex justify-between">
+            <div
+              class="text-[11px] text-[var(--text-faint)] flex justify-between"
+            >
               <span>Verificações: {watchdog.uptime_checks}</span>
               <span>Quedas: {watchdog.downtime_events}</span>
             </div>
             {#if watchdog.last_seen_online}
               <div class="text-[10px] text-[var(--text-faint)]">
-                Visto por último: {new Date(watchdog.last_seen_online).toLocaleTimeString('pt-BR')}
+                Visto por último: {new Date(
+                  watchdog.last_seen_online,
+                ).toLocaleTimeString("pt-BR")}
               </div>
             {/if}
           </div>
@@ -671,40 +842,64 @@
 
         {#if cockpitEnabled}
           {#if CockpitComp}
-            <CockpitComp active={open && activeTab === 'settings'} />
+            <CockpitComp active={open && activeTab === "settings"} />
           {:else if cockpitLoadAttempted}
-            <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]">
+            <div
+              class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]"
+            >
               Pacote opcional Cockpit habilitado, mas módulo UI não encontrado.
             </div>
           {:else}
-            <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]">
+            <div
+              class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-faint)]"
+            >
               Carregando painel Cockpit...
             </div>
           {/if}
         {:else if telemetryEnabled && telemetry && telemetry.enabled}
-          <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-1.5 theme-surface">
-            <div class="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]">
+          <div
+            class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-1.5 theme-surface"
+          >
+            <div
+              class="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]"
+            >
               <span>Telemetria de Hardware</span>
               <Icon name="cpu" size={14} class="text-[var(--accent-fg)]" />
             </div>
             {#if telemetry.gpu}
-              <div class="text-[11px] text-[var(--text-secondary)] flex justify-between">
+              <div
+                class="text-[11px] text-[var(--text-secondary)] flex justify-between"
+              >
                 <span class="truncate pr-2">{telemetry.gpu.name}</span>
-                <span class="font-mono text-[var(--accent-fg)] shrink-0">{telemetry.gpu.temp_c}°C</span>
+                <span class="font-mono text-[var(--accent-fg)] shrink-0"
+                  >{telemetry.gpu.temp_c}°C</span
+                >
               </div>
-              <div class="text-[11px] text-[var(--text-faint)] flex justify-between">
+              <div
+                class="text-[11px] text-[var(--text-faint)] flex justify-between"
+              >
                 <span>VRAM</span>
-                <span class="font-mono">{telemetry.gpu.vram_used_mb} / {telemetry.gpu.vram_total_mb} MB</span>
+                <span class="font-mono"
+                  >{telemetry.gpu.vram_used_mb} / {telemetry.gpu.vram_total_mb} MB</span
+                >
               </div>
             {/if}
             {#if telemetry.ram}
-              <div class="text-[11px] text-[var(--text-faint)] flex justify-between">
+              <div
+                class="text-[11px] text-[var(--text-faint)] flex justify-between"
+              >
                 <span>RAM</span>
-                <span class="font-mono">{Math.round(telemetry.ram.used_mb / 1024)} / {Math.round(telemetry.ram.total_mb / 1024)} GB</span>
+                <span class="font-mono"
+                  >{Math.round(telemetry.ram.used_mb / 1024)} / {Math.round(
+                    telemetry.ram.total_mb / 1024,
+                  )} GB</span
+                >
               </div>
             {/if}
             {#if telemetry.cpu_temp !== null}
-              <div class="text-[11px] text-[var(--text-faint)] flex justify-between">
+              <div
+                class="text-[11px] text-[var(--text-faint)] flex justify-between"
+              >
                 <span>CPU Temp</span>
                 <span class="font-mono">{telemetry.cpu_temp}°C</span>
               </div>
