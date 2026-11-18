@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/automation"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/db"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/jobs"
@@ -207,6 +208,21 @@ func newCockpitProxy(cockpitURL, token string) http.Handler {
 }
 
 func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, mgr *jobs.Manager, wd *watchdogState) *http.ServeMux {
+	notifier := automation.NewNotifier(store)
+	mgr.OnJobFinish = notifier.HandleJobFinish
+	sched := automation.NewScheduler(cfg, store, r, mgr, notifier)
+	return buildAppMux(cfg, store, r, mgr, wd, notifier, sched)
+}
+
+func buildAppMux(
+	cfg config.GatewaySettings,
+	store *db.GatewayDB,
+	r runner.Runner,
+	mgr *jobs.Manager,
+	wd *watchdogState,
+	notifier *automation.Notifier,
+	sched *automation.Scheduler,
+) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, req *http.Request) {
@@ -234,12 +250,14 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 		if enabled, _ := cfg.Mods["wol"].(bool); enabled && cfg.WolMAC != "" {
 			wolMAC = cfg.WolMAC
 		}
+		unreadAlerts, _ := store.CountUnreadAlerts()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"online":      r.CheckOnline(req.Context(), 1500*time.Millisecond),
-			"mode":        cfg.Mode,
-			"target_host": cfg.TargetHost,
-			"wol_mac":     wolMAC,
-			"target_user": cfg.TargetUser,
+			"online":        r.CheckOnline(req.Context(), 1500*time.Millisecond),
+			"mode":          cfg.Mode,
+			"target_host":   cfg.TargetHost,
+			"wol_mac":       wolMAC,
+			"target_user":   cfg.TargetUser,
+			"unread_alerts": unreadAlerts,
 		})
 	})
 
@@ -890,6 +908,7 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 	if enabled, _ := cfg.Mods["cockpit"].(bool); enabled {
 		mux.Handle("/api/cockpit/", newCockpitProxy(cfg.CockpitURL, cfg.CockpitToken))
 	}
+	registerAutomationRoutes(mux, store, notifier, sched)
 
 	web.RegisterRoutes(mux, web.StaticFS())
 	return mux
@@ -931,9 +950,13 @@ func main() {
 	execRunner := runner.Create(cfg)
 	jobMgr := jobs.NewManager(cfg, store, execRunner)
 	wd := &watchdogState{}
+	notifier := automation.NewNotifier(store)
+	jobMgr.OnJobFinish = notifier.HandleJobFinish
+	sched := automation.NewScheduler(cfg, store, execRunner, jobMgr, notifier)
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
+	sched.Start(bgCtx)
 	if enabled, _ := cfg.Mods["watchdog"].(bool); enabled {
 		go func() {
 			wd.probe(bgCtx, execRunner)
@@ -952,7 +975,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           buildMux(cfg, store, execRunner, jobMgr, wd),
+		Handler:           buildAppMux(cfg, store, execRunner, jobMgr, wd, notifier, sched),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -960,6 +983,13 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			log.Printf("AGY Mobile Gateway (Go %s) listening on https://0.0.0.0:%s [mode=%s]", appVersion, cfg.Port, cfg.Mode)
+			if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("server tls error: %v", err)
+			}
+			return
+		}
 		log.Printf("AGY Mobile Gateway (Go %s) listening on http://0.0.0.0:%s [mode=%s]", appVersion, cfg.Port, cfg.Mode)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)

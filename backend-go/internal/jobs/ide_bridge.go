@@ -128,7 +128,7 @@ func (m *Manager) runIDEBridgeJob(ctx context.Context, jobID string, convID *str
 				"executed_tools":  []string{"ide_bridge"},
 				"response":        text,
 			})
-			go m.sendNtfy("AGY (IDE Bridge) Concluído", text, cid, "default")
+			m.notifyJobResult(jobID, cid, "completed", "AGY (IDE Bridge) Concluído", text, "default")
 			return
 		}
 	}

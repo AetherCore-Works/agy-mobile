@@ -31,6 +31,8 @@ type GatewaySettings struct {
 	CockpitToken        string
 	IDEBridgeDir        string
 	IDEBridgeTimeoutSec int
+	TLSCertFile         string
+	TLSKeyFile          string
 	Dirs                AppDirs
 	Mods                map[string]any
 }
@@ -170,6 +172,8 @@ func Load() GatewaySettings {
 	cockpitURL := envOr("COCKPIT_URL", "")
 	cockpitToken := strings.TrimSpace(os.Getenv("COCKPIT_TOKEN"))
 	bridgeDir := envOr("IDE_BRIDGE_DIR", filepath.Join(dirs.DataDir, "agy-bridge"))
+	tlsCertFile := envOr("TLS_CERT_FILE", "")
+	tlsKeyFile := envOr("TLS_KEY_FILE", "")
 	bridgeTimeout := 180
 	if rawT := envOr("IDE_BRIDGE_TIMEOUT_SEC", ""); rawT != "" {
 		var parsedT int
@@ -202,6 +206,8 @@ func Load() GatewaySettings {
 		"ntfy":         boolEnv("ENABLE_NTFY", false) || envOr("NTFY_TOPIC", "") != "",
 		"whisper":      boolEnv("ENABLE_WHISPER", false) || whisperURL != "",
 		"cockpit":      cockpitEnabled,
+		"automations":  true,
+		"web_push":     true,
 		"ide_bridge":   isIDEBridge,
 		"telemetry":    boolEnv("ENABLE_TELEMETRY", isGateway),
 		"slash_commands": []string{
@@ -223,6 +229,8 @@ func Load() GatewaySettings {
 		CockpitToken:        cockpitToken,
 		IDEBridgeDir:        bridgeDir,
 		IDEBridgeTimeoutSec: bridgeTimeout,
+		TLSCertFile:         tlsCertFile,
+		TLSKeyFile:          tlsKeyFile,
 		Dirs:                dirs,
 		Mods:                mods,
 	}

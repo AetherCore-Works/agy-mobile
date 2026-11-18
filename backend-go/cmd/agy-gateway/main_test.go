@@ -575,3 +575,141 @@ func TestCockpitOptionalProxy(t *testing.T) {
 		t.Fatalf("expected 502 when cockpit unreachable, got %d", downRec.Code)
 	}
 }
+
+func TestAutomationsCronAlertsAndWebPushRoutes(t *testing.T) {
+	mux, _, _ := newTestServer(t)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// 1. Service Worker, Manifest, Apple Touch Icon & VAPID key
+	swResp, err := http.Get(ts.URL + "/sw.js")
+	if err != nil || swResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /sw.js failed: err=%v resp=%v", err, swResp)
+	}
+	_ = swResp.Body.Close()
+	if swResp.Header.Get("Service-Worker-Allowed") != "/" {
+		t.Fatalf("expected Service-Worker-Allowed=/ header on /sw.js, got %q", swResp.Header.Get("Service-Worker-Allowed"))
+	}
+
+	manifestResp, err := http.Get(ts.URL + "/manifest.json")
+	if err != nil || manifestResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /manifest.json failed: err=%v resp=%v", err, manifestResp)
+	}
+	manifestBytes, _ := io.ReadAll(manifestResp.Body)
+	_ = manifestResp.Body.Close()
+	if !strings.Contains(string(manifestBytes), `"standalone"`) || !strings.Contains(string(manifestBytes), `"maskable"`) {
+		t.Fatalf("unexpected manifest content: %s", string(manifestBytes))
+	}
+
+	appleIconResp, err := http.Get(ts.URL + "/static/apple-touch-icon.png")
+	if err != nil || appleIconResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /static/apple-touch-icon.png failed: err=%v resp=%v", err, appleIconResp)
+	}
+	_ = appleIconResp.Body.Close()
+
+	vapidResp, err := http.Get(ts.URL + "/api/push/vapid-public-key")
+	if err != nil || vapidResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/push/vapid-public-key failed: err=%v resp=%v", err, vapidResp)
+	}
+	var vapidBody struct {
+		PublicKey string `json:"public_key"`
+		Supported bool   `json:"supported"`
+	}
+	_ = json.NewDecoder(vapidResp.Body).Decode(&vapidBody)
+	_ = vapidResp.Body.Close()
+	if !vapidBody.Supported || len(vapidBody.PublicKey) < 40 {
+		t.Fatalf("unexpected VAPID response: %+v", vapidBody)
+	}
+
+	// 2. Push subscribe & unsubscribe
+	subBody := `{"endpoint":"https://push.example/sub1","keys":{"p256dh":"abc","auth":"def"}}`
+	subResp, _ := http.Post(ts.URL+"/api/push/subscribe", "application/json", strings.NewReader(subBody))
+	_ = subResp.Body.Close()
+	if subResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/push/subscribe got %d", subResp.StatusCode)
+	}
+	unsubResp, _ := http.Post(ts.URL+"/api/push/unsubscribe", "application/json", strings.NewReader(`{"endpoint":"https://push.example/sub1"}`))
+	_ = unsubResp.Body.Close()
+	if unsubResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/push/unsubscribe got %d", unsubResp.StatusCode)
+	}
+
+	// 3. Cron automation validation & CRUD + run now
+	badCronResp, _ := http.Post(ts.URL+"/api/automations", "application/json", strings.NewReader(`{"name":"Bad","cron_expr":"99 * * * *","kind":"check"}`))
+	_ = badCronResp.Body.Close()
+	if badCronResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid cron, got %d", badCronResp.StatusCode)
+	}
+
+	okCronResp, err := http.Post(
+		ts.URL+"/api/automations",
+		"application/json",
+		strings.NewReader(`{"name":"Checar 08h","cron_expr":"0 8 * * *","kind":"check","prompt":"disco e docker","notify_on":"always"}`),
+	)
+	if err != nil || okCronResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/automations failed: err=%v resp=%v", err, okCronResp)
+	}
+	var created struct {
+		ID        string `json:"id"`
+		NextRunAt string `json:"next_run_at"`
+	}
+	_ = json.NewDecoder(okCronResp.Body).Decode(&created)
+	_ = okCronResp.Body.Close()
+	if created.ID == "" || created.NextRunAt == "" {
+		t.Fatalf("expected ID and NextRunAt, got %+v", created)
+	}
+
+	patchReq, _ := http.NewRequest(http.MethodPatch, ts.URL+"/api/automations/"+created.ID, strings.NewReader(`{"enabled":false}`))
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, _ := http.DefaultClient.Do(patchReq)
+	_ = patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH /api/automations got %d", patchResp.StatusCode)
+	}
+
+	runResp, _ := http.Post(ts.URL+"/api/automations/"+created.ID+"/run", "application/json", nil)
+	_ = runResp.Body.Close()
+	if runResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/automations/{id}/run got %d", runResp.StatusCode)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. Alert config, test dispatch, list, read, clear
+	cfgReq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/alerts/config", strings.NewReader(`{"notify_job_done":true,"notify_long_job_sec":30,"notify_docker_down":true,"gpu_temp_threshold_c":80,"disk_free_min_pct":12,"ntfy_topic":"agy-test","web_push_enabled":true,"notify_desktop":false}`))
+	cfgReq.Header.Set("Content-Type", "application/json")
+	cfgResp, _ := http.DefaultClient.Do(cfgReq)
+	_ = cfgResp.Body.Close()
+	if cfgResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/alerts/config got %d", cfgResp.StatusCode)
+	}
+
+	testAlertResp, _ := http.Post(ts.URL+"/api/alerts/test", "application/json", nil)
+	_ = testAlertResp.Body.Close()
+	if testAlertResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/alerts/test got %d", testAlertResp.StatusCode)
+	}
+
+	listAlertsResp, _ := http.Get(ts.URL + "/api/alerts?limit=10")
+	var alertListBody struct {
+		Alerts      []db.AlertEvent `json:"alerts"`
+		UnreadCount int             `json:"unread_count"`
+	}
+	_ = json.NewDecoder(listAlertsResp.Body).Decode(&alertListBody)
+	_ = listAlertsResp.Body.Close()
+	if len(alertListBody.Alerts) == 0 || alertListBody.UnreadCount == 0 {
+		t.Fatalf("expected recorded alerts, got %+v", alertListBody)
+	}
+
+	readResp, _ := http.Post(ts.URL+"/api/alerts/read", "application/json", strings.NewReader(`{}`))
+	_ = readResp.Body.Close()
+	if readResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/alerts/read got %d", readResp.StatusCode)
+	}
+
+	delAutoReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/automations/"+created.ID, nil)
+	delAutoResp, _ := http.DefaultClient.Do(delAutoReq)
+	_ = delAutoResp.Body.Close()
+	if delAutoResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE /api/automations got %d", delAutoResp.StatusCode)
+	}
+}

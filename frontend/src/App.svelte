@@ -9,15 +9,20 @@
   import TerminalModal from './components/TerminalModal.svelte';
   import OutboxModal from './components/OutboxModal.svelte';
   import ShareModal from './components/ShareModal.svelte';
+  import AutomationsModal from './components/AutomationsModal.svelte';
   import {
     deleteConversation,
+    enableBrowserWebPush,
     fetchFeatures,
     fetchModels,
     fetchOutbox,
     fetchSettings,
     fetchStatus,
+    registerGatewayServiceWorker,
+    showBrowserNotification,
     triggerWol,
     updateSettings,
+    type AlertEvent,
     type ChatMessage,
     type GatewaySettings,
     type ModelInfo,
@@ -259,6 +264,8 @@
   let terminalOpen = $state(false);
   let outboxOpen = $state(false);
   let outboxFiles = $state<OutboxFile[]>([]);
+  let automationsOpen = $state(false);
+  let unreadAlerts = $state(0);
 
   // Share Snapshot Modal
   let shareOpen = $state(false);
@@ -311,6 +318,9 @@
     try {
       const st = await fetchStatus();
       targetOnline = st.online;
+      if (typeof st.unread_alerts === 'number') {
+        unreadAlerts = st.unread_alerts;
+      }
     } catch {
       targetOnline = false;
     }
@@ -326,9 +336,106 @@
     setTimeout(refreshStatusAndOutbox, 3000);
   }
 
+  interface BeforeInstallPromptEvent extends Event {
+    prompt: () => Promise<void>;
+    userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+  }
+
   let statusInterval: ReturnType<typeof setInterval> | null = null;
+  let alertEventSource: EventSource | null = null;
+  let liveAlertToast = $state<AlertEvent | null>(null);
+  let alertToastTimer: ReturnType<typeof setTimeout> | null = null;
+  let deferredInstallPrompt = $state<BeforeInstallPromptEvent | null>(null);
+  let browserNotifPerm = $state<NotificationPermission>(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'denied',
+  );
+
+  async function handleInstallPWA(): Promise<boolean> {
+    if (!deferredInstallPrompt) return false;
+    try {
+      await deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        deferredInstallPrompt = null;
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  function refreshBrowserNotifPerm() {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      browserNotifPerm = Notification.permission;
+    }
+  }
+
+  async function handleEnableBrowserFromToast() {
+    const current = liveAlertToast;
+    try {
+      await enableBrowserWebPush();
+      refreshBrowserNotifPerm();
+      if (current) {
+        showBrowserNotification(current, (convId) => {
+          paneRefs[focusedTabId]?.loadConversation(convId, current.title);
+        });
+      }
+    } catch {
+      refreshBrowserNotifPerm();
+    }
+  }
+
+  function showLiveAlertToast(ev: AlertEvent) {
+    liveAlertToast = ev;
+    refreshBrowserNotifPerm();
+    if (alertToastTimer) clearTimeout(alertToastTimer);
+    alertToastTimer = setTimeout(() => {
+      if (liveAlertToast?.id === ev.id) liveAlertToast = null;
+    }, 7000);
+  }
+
+  function startAlertStream() {
+    if (typeof EventSource === 'undefined') return;
+    if (alertEventSource) alertEventSource.close();
+    const es = new EventSource('/api/alerts/stream');
+    es.addEventListener('init', (msg) => {
+      try {
+        const d = JSON.parse((msg as MessageEvent).data);
+        if (typeof d.unread_count === 'number') unreadAlerts = d.unread_count;
+      } catch {
+        // ignore
+      }
+    });
+    es.addEventListener('alert', (msg) => {
+      try {
+        const ev = JSON.parse((msg as MessageEvent).data) as AlertEvent;
+        unreadAlerts += 1;
+        showLiveAlertToast(ev);
+        showBrowserNotification(ev, (convId) => {
+          paneRefs[focusedTabId]?.loadConversation(convId, ev.title);
+        });
+      } catch {
+        // ignore
+      }
+    });
+    alertEventSource = es;
+  }
+
+  function handleBeforeInstall(e: Event) {
+    e.preventDefault();
+    deferredInstallPrompt = e as BeforeInstallPromptEvent;
+  }
+
+  function handleAppInstalled() {
+    deferredInstallPrompt = null;
+  }
 
   onMount(async () => {
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    void registerGatewayServiceWorker();
+
     const [loadedSettings, loadedModels, loadedFeatures] = await Promise.all([
       fetchSettings().catch(() => settings),
       fetchModels().catch(() => models),
@@ -359,11 +466,24 @@
     defaultModel = loadedSettings.default_model || 'gemini-4-hydrogen-high';
     defaultPermission = loadedSettings.default_permission_mode || 'copilot';
 
+    const convParam = new URLSearchParams(window.location.search).get('conv');
+    if (convParam) {
+      paneRefs[focusedTabId]?.loadConversation(convParam);
+      window.history.replaceState({}, '', '/');
+    }
+
+    startAlertStream();
     statusInterval = setInterval(refreshStatusAndOutbox, 15000);
   });
 
   onDestroy(() => {
     if (statusInterval) clearInterval(statusInterval);
+    if (alertToastTimer) clearTimeout(alertToastTimer);
+    if (alertEventSource) alertEventSource.close();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    }
   });
 </script>
 
@@ -372,6 +492,7 @@
     if (e.key === 'Escape') {
       if (themeMenuOpen) themeMenuOpen = false;
       if (pendingDelete && !deletingChat) pendingDelete = null;
+      if (automationsOpen) automationsOpen = false;
     }
   }}
 />
@@ -409,7 +530,7 @@
       </div>
     </div>
 
-    <div class="flex items-center gap-1.5 shrink-0">
+    <div class="flex items-center gap-1 sm:gap-1.5 shrink-0">
       <!-- Desktop Split View Toggle -->
       <button
         type="button"
@@ -446,7 +567,7 @@
             const ctx = paneRefs[focusedTabId]?.getSnapshotContext();
             requestDeleteConversation(focusedConvId, ctx?.title || focusedTab?.title || 'Conversa atual');
           }}
-          class="p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-rose-400 transition-colors active:scale-95"
+          class="p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-rose-400 transition-colors active:scale-95"
           title="Apagar chat atual"
           aria-label="Apagar chat atual"
         >
@@ -454,11 +575,27 @@
         </button>
       {/if}
 
+      <!-- Automations & Active Alerts Bell -->
+      <button
+        type="button"
+        onclick={() => (automationsOpen = true)}
+        class="relative p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
+        title="Automações Cron & Alertas Ativos"
+        aria-label="Automações Cron e Alertas"
+      >
+        <Icon name="bell" size={17} />
+        {#if unreadAlerts > 0}
+          <span class="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center">
+            {unreadAlerts > 99 ? '99+' : unreadAlerts}
+          </span>
+        {/if}
+      </button>
+
       <!-- Theme & Color Palette Button -->
       <button
         type="button"
         onclick={() => (themeMenuOpen = !themeMenuOpen)}
-        class="relative p-2 rounded-xl border transition-all active:scale-95 {themeMenuOpen ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-chip)] border-transparent text-[var(--text-secondary)] hover:text-[var(--accent-fg)]'}"
+        class="relative p-1.5 sm:p-2 rounded-xl border transition-all active:scale-95 {themeMenuOpen ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent-fg)]' : 'bg-[var(--bg-chip)] border-transparent text-[var(--text-secondary)] hover:text-[var(--accent-fg)]'}"
         title="Tema e paleta de cores"
         aria-label="Tema e paleta de cores"
       >
@@ -472,7 +609,7 @@
       <button
         type="button"
         onclick={() => (outboxOpen = true)}
-        class="relative p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
+        class="relative p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] transition-colors active:scale-95"
         title="Outbox"
       >
         <Icon name="outbox" size={18} />
@@ -487,7 +624,7 @@
         <button
           type="button"
           onclick={() => (terminalOpen = true)}
-          class="p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-emerald-500 transition-colors active:scale-95"
+          class="p-1.5 sm:p-2 rounded-xl bg-[var(--bg-chip)] text-[var(--text-secondary)] hover:text-emerald-500 transition-colors active:scale-95"
           title="Terminal HITL"
         >
           <Icon name="terminal" size={18} />
@@ -497,7 +634,7 @@
       <button
         type="button"
         onclick={handleHeaderNewAction}
-        class="p-2 rounded-xl bg-[var(--accent-soft)] text-[var(--accent-fg)] border border-[var(--accent-border)] hover:opacity-90 transition-all active:scale-95"
+        class="p-1.5 sm:p-2 rounded-xl bg-[var(--accent-soft)] text-[var(--accent-fg)] border border-[var(--accent-border)] hover:opacity-90 transition-all active:scale-95"
         title="Nova Aba / Conversa"
       >
         <Icon name="plus" size={18} />
@@ -703,6 +840,7 @@
   watchdogEnabled={features.watchdog !== false}
   telemetryEnabled={features.telemetry === true}
   cockpitEnabled={features.cockpit === true}
+  {unreadAlerts}
   {themeMode}
   {themePalette}
   bind:settings={settings}
@@ -713,6 +851,7 @@
     paneRefs[focusedTabId]?.newConversation();
   }}
   onConversationDeleted={handleConversationDeleted}
+  onOpenAutomations={() => (automationsOpen = true)}
   onThemeChange={setTheme}
   onSettingsSaved={(s) => {
     defaultPermission = s.default_permission_mode;
@@ -732,6 +871,19 @@
   messages={shareMessages}
   {themeMode}
   {themePalette}
+/>
+<AutomationsModal
+  bind:open={automationsOpen}
+  {models}
+  {defaultModel}
+  canInstallPWA={Boolean(deferredInstallPrompt)}
+  onInstallPWA={handleInstallPWA}
+  onOpenConversation={(convId, title) => {
+    paneRefs[focusedTabId]?.loadConversation(convId, title);
+  }}
+  onUnreadChange={(n) => {
+    unreadAlerts = n;
+  }}
 />
 
 {#if pendingDelete}
@@ -789,6 +941,67 @@
           <span>{deletingChat ? 'Apagando...' : 'Apagar chat'}</span>
         </button>
       </div>
+    </div>
+  </div>
+{/if}
+
+{#if liveAlertToast}
+  <div
+    transition:fly={{ y: -16, duration: 180, easing: cubicOut }}
+    class="fixed top-16 right-3 z-50 w-80 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-[var(--bg-elevated)] border border-[var(--accent-border)] p-3 shadow-2xl theme-surface space-y-1.5"
+  >
+    <div class="flex items-start justify-between gap-2">
+      <div class="flex items-center gap-1.5 min-w-0">
+        <Icon name="bell" size={14} class="text-[var(--accent-fg)] shrink-0" />
+        <span class="text-xs font-bold text-[var(--text-primary)] truncate">{liveAlertToast.title}</span>
+      </div>
+      <button
+        type="button"
+        onclick={() => (liveAlertToast = null)}
+        class="text-[var(--text-faint)] hover:text-[var(--text-primary)] shrink-0"
+        aria-label="Fechar alerta"
+      >
+        <Icon name="close" size={14} />
+      </button>
+    </div>
+    <p class="text-[11px] text-[var(--text-secondary)] line-clamp-3 break-words">{liveAlertToast.message}</p>
+    <div class="flex items-center justify-between gap-2 pt-0.5">
+      <div>
+        {#if typeof window !== 'undefined' && window.isSecureContext && 'Notification' in window && browserNotifPerm === 'default'}
+          <button
+            type="button"
+            onclick={handleEnableBrowserFromToast}
+            class="text-[11px] font-medium text-[var(--text-secondary)] hover:text-[var(--accent-fg)] underline"
+          >
+            Ativar no navegador
+          </button>
+        {/if}
+      </div>
+      {#if liveAlertToast.conv_id}
+        <button
+          type="button"
+          onclick={() => {
+            if (liveAlertToast?.conv_id) {
+              paneRefs[focusedTabId]?.loadConversation(liveAlertToast.conv_id, liveAlertToast.title);
+            }
+            liveAlertToast = null;
+          }}
+          class="text-[11px] font-semibold text-[var(--accent-fg)] hover:underline"
+        >
+          Abrir sessão
+        </button>
+      {:else}
+        <button
+          type="button"
+          onclick={() => {
+            liveAlertToast = null;
+            automationsOpen = true;
+          }}
+          class="text-[11px] font-semibold text-[var(--accent-fg)] hover:underline"
+        >
+          Ver alertas
+        </button>
+      {/if}
     </div>
   </div>
 {/if}

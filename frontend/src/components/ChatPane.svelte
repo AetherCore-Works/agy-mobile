@@ -10,6 +10,7 @@
     fetchConversation,
     fetchFeatures,
     fetchWatchdog,
+    transcribeAudio,
     uploadFile,
     type ChatMessage,
     type ModelInfo,
@@ -103,7 +104,17 @@
   let deltaCharsCount = 0;
 
   let isListening = $state(false);
+  let transcribingVoice = $state(false);
+  let showVoiceButton = $state(false);
   let recognition = $state<any>(null);
+  let hasMediaRecorder = $state(false);
+  let voiceNotice = $state('');
+  let voiceNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  let voicePrefix = '';
+  let voiceFinal = '';
+  let mediaRecorder: MediaRecorder | null = null;
+  let mediaStream: MediaStream | null = null;
+  let mediaChunks: BlobPart[] = [];
   let slashMenuOpen = $state(false);
   let approvalNeeded = $state<{ tool: string; command: string } | null>(null);
 
@@ -523,10 +534,149 @@
     }
   }
 
+  function flashVoiceNotice(msg: string) {
+    voiceNotice = msg;
+    if (voiceNoticeTimer) clearTimeout(voiceNoticeTimer);
+    voiceNoticeTimer = setTimeout(() => {
+      if (voiceNotice === msg) voiceNotice = '';
+    }, 6500);
+  }
+
+  function syncTextareaHeight() {
+    tick().then(() => {
+      if (!textareaEl) return;
+      textareaEl.style.height = 'auto';
+      textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, 120)}px`;
+    });
+  }
+
+  function mapSpeechError(code: string): string {
+    switch (code) {
+      case 'not-allowed':
+      case 'service-not-allowed':
+        if (typeof window !== 'undefined' && !window.isSecureContext) {
+          return 'Microfone bloqueado em HTTP local. Use HTTPS / domínio próprio ou o microfone do teclado.';
+        }
+        return 'Permissão de microfone ou ditado negada no navegador.';
+      case 'audio-capture':
+        return 'Nenhum microfone disponível ou em uso por outro app.';
+      case 'no-speech':
+        return 'Nenhuma fala detectada. Tente falar mais perto do microfone.';
+      case 'network':
+        return 'Serviço de reconhecimento de voz do navegador indisponível.';
+      case 'aborted':
+        return '';
+      default:
+        return `Erro no ditado por voz (${code || 'desconhecido'}).`;
+    }
+  }
+
+  function cleanupMediaRecording() {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((t) => t.stop());
+      mediaStream = null;
+    }
+    mediaRecorder = null;
+    mediaChunks = [];
+  }
+
+  async function startWhisperRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStream = stream;
+      mediaChunks = [];
+      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+      const mimeType = candidates.find((m) => typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(m)) || '';
+      const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRecorder = rec;
+
+      rec.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) mediaChunks.push(ev.data);
+      };
+      rec.onstop = async () => {
+        const blobType = rec.mimeType || mimeType || 'audio/webm';
+        const ext = blobType.includes('mp4') ? 'm4a' : blobType.includes('ogg') ? 'ogg' : 'webm';
+        const blob = new Blob(mediaChunks, { type: blobType });
+        cleanupMediaRecording();
+        isListening = false;
+        if (blob.size < 256) return;
+        transcribingVoice = true;
+        try {
+          const text = await transcribeAudio(blob, `voice.${ext}`);
+          if (text) {
+            userInput = userInput.trim() ? `${userInput.trim()} ${text}` : text;
+            syncTextareaHeight();
+          } else {
+            flashVoiceNotice('Nenhuma fala reconhecida na gravação.');
+          }
+        } catch (err: any) {
+          flashVoiceNotice(err?.message || 'Falha ao transcrever áudio.');
+        } finally {
+          transcribingVoice = false;
+        }
+      };
+      rec.onerror = () => {
+        isListening = false;
+        cleanupMediaRecording();
+        flashVoiceNotice('Falha ao gravar áudio do microfone.');
+      };
+      rec.start();
+      isListening = true;
+      voiceNotice = '';
+    } catch (err: any) {
+      isListening = false;
+      cleanupMediaRecording();
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        flashVoiceNotice('Permissão de microfone negada nas configurações do navegador.');
+      } else {
+        flashVoiceNotice(err?.message || 'Não foi possível acessar o microfone.');
+      }
+    }
+  }
+
   function toggleVoice() {
-    if (!recognition) return;
-    if (isListening) recognition.stop();
-    else recognition.start();
+    voiceNotice = '';
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      flashVoiceNotice('O microfone no navegador exige HTTPS / domínio próprio (ou localhost). Em HTTP local, use o microfone do teclado do celular.');
+      return;
+    }
+
+    if (mediaRecorder && isListening) {
+      mediaRecorder.stop();
+      return;
+    }
+
+    if (recognition) {
+      if (isListening) {
+        try {
+          recognition.stop();
+        } catch {
+          isListening = false;
+        }
+        return;
+      }
+      voicePrefix = userInput.trim();
+      voiceFinal = '';
+      try {
+        recognition.start();
+        return;
+      } catch (err: any) {
+        isListening = false;
+        if (features.whisper && hasMediaRecorder) {
+          void startWhisperRecording();
+          return;
+        }
+        flashVoiceNotice(err?.message || 'Não foi possível iniciar o reconhecimento de voz.');
+        return;
+      }
+    }
+
+    if (features.whisper && hasMediaRecorder) {
+      void startWhisperRecording();
+      return;
+    }
+
+    flashVoiceNotice('Ditado nativo indisponível neste navegador. Use o microfone do teclado ou ative HTTPS.');
   }
 
   async function copyAgentMessage(idx: number, content: string) {
@@ -572,22 +722,55 @@
   onMount(async () => {
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    hasMediaRecorder =
+      typeof window !== 'undefined' &&
+      typeof MediaRecorder !== 'undefined' &&
+      Boolean(navigator.mediaDevices?.getUserMedia);
+
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    showVoiceButton =
+      typeof window !== 'undefined' &&
+      (!window.isSecureContext || Boolean(SpeechRec) || (Boolean(features.whisper) && hasMediaRecorder));
     if (SpeechRec) {
-      recognition = new SpeechRec();
-      recognition.lang = 'pt-BR';
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onstart = () => (isListening = true);
-      recognition.onend = () => (isListening = false);
-      recognition.onerror = () => recognition.stop();
-      recognition.onresult = (ev: any) => {
-        let transcript = '';
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          transcript += ev.results[i][0].transcript;
-        }
-        userInput = transcript;
+      const rec = new SpeechRec();
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+      rec.lang = 'pt-BR';
+      // Chrome Android drops/duplicates interim streams when continuous=true
+      rec.continuous = !isMobile;
+      rec.interimResults = true;
+      rec.onstart = () => {
+        isListening = true;
+        voiceNotice = '';
       };
+      rec.onend = () => {
+        isListening = false;
+      };
+      rec.onerror = (ev: any) => {
+        isListening = false;
+        const code = String(ev?.error || '');
+        if ((code === 'network' || code === 'service-not-allowed') && features.whisper && hasMediaRecorder && window.isSecureContext) {
+          void startWhisperRecording();
+          return;
+        }
+        const msg = mapSpeechError(code);
+        if (msg) flashVoiceNotice(msg);
+      };
+      rec.onresult = (ev: any) => {
+        let interim = '';
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const res = ev.results[i];
+          const text = String(res?.[0]?.transcript || '').trim();
+          if (!text) continue;
+          if (res.isFinal) {
+            voiceFinal = voiceFinal ? `${voiceFinal} ${text}` : text;
+          } else {
+            interim = interim ? `${interim} ${text}` : text;
+          }
+        }
+        userInput = [voicePrefix, voiceFinal, interim].filter(Boolean).join(' ');
+        syncTextareaHeight();
+      };
+      recognition = rec;
     }
 
     if (conversationId) {
@@ -604,6 +787,20 @@
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     if (finishTimer) clearTimeout(finishTimer);
     if (copyMsgTimer) clearTimeout(copyMsgTimer);
+    if (voiceNoticeTimer) clearTimeout(voiceNoticeTimer);
+    try {
+      recognition?.abort?.();
+    } catch {
+      // ignore
+    }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try {
+        mediaRecorder.stop();
+      } catch {
+        // ignore
+      }
+    }
+    cleanupMediaRecording();
     stopElapsedTimer();
     streamAbort?.abort();
   });
@@ -940,20 +1137,38 @@
                 <span>Anexar</span>
               </button>
 
-              {#if recognition}
+              {#if showVoiceButton || (Boolean(features.whisper) && hasMediaRecorder)}
                 <button
                   type="button"
                   onclick={toggleVoice}
-                  class="px-2 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-all active:scale-95 {isListening ? 'bg-rose-600 border-rose-600 text-white animate-pulse' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] hover:border-[var(--border-strong)]'}"
-                  title="Ditado por voz"
+                  disabled={transcribingVoice}
+                  class="px-2 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50 {isListening ? 'bg-rose-600 border-rose-600 text-white animate-pulse' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--accent-fg)] hover:border-[var(--border-strong)]'}"
+                  title="Ditado por voz (requer HTTPS / localhost)"
                 >
                   <Icon name="mic" size={13} />
-                  <span>{isListening ? 'Ouvindo...' : 'Voz'}</span>
+                  <span>{transcribingVoice ? 'Transcrevendo...' : isListening ? 'Ouvindo...' : 'Voz'}</span>
                 </button>
               {/if}
 
             </div>
           </div>
+
+          {#if voiceNotice}
+            <div
+              transition:fade={{ duration: 140 }}
+              class="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/35 text-[11px] text-amber-300"
+            >
+              <span class="break-words">{voiceNotice}</span>
+              <button
+                type="button"
+                onclick={() => (voiceNotice = '')}
+                class="text-amber-300/80 hover:text-amber-200 shrink-0"
+                aria-label="Fechar aviso de voz"
+              >
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+          {/if}
 
           <!-- Attached File Chips -->
           {#if attachedFiles.length > 0}
