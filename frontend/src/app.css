@@ -1,22 +1,77 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 @import "@xterm/xterm/css/xterm.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --animate-flip: flip 6s infinite steps(2, end);
+  --animate-kitrotate: kitrotate 3s linear infinite both;
+}
+
+:root {
+  --radius: 0.625rem;
+  --primary: var(--accent-solid);
+  --primary-foreground: var(--accent-on-solid);
+  --secondary: var(--bg-chip);
+  --secondary-foreground: var(--text-secondary);
+  --accent: var(--accent-soft);
+  --accent-foreground: var(--accent-fg);
+  --destructive: #e11d48;
+  --destructive-foreground: #ffffff;
+  --ring: var(--accent-fg);
+}
 
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
   --bg-app: #09090b;
-  --bg-surface: rgba(24, 24, 27, 0.94);
-  --bg-elevated: #18181b;
-  --bg-input: #09090b;
+  --bg-surface: rgba(17, 17, 20, 0.92);
+  --bg-elevated: #141418;
+  --bg-input: #0b0b0e;
   --bg-chip: rgba(39, 39, 42, 0.85);
   --bg-chip-hover: #3f3f46;
-  --bg-backdrop: rgba(0, 0, 0, 0.62);
-  --border-subtle: #27272a;
-  --border-strong: #3f3f46;
-  --text-primary: #f4f4f5;
+  --bg-backdrop: rgba(0, 0, 0, 0.64);
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text-primary: #fafafa;
   --text-secondary: #d4d4d8;
   --text-muted: #a1a1aa;
   --text-faint: #71717a;
+  --background: var(--bg-app);
+  --foreground: var(--text-primary);
+  --card: var(--bg-elevated);
+  --card-foreground: var(--text-primary);
+  --popover: var(--bg-elevated);
+  --popover-foreground: var(--text-primary);
+  --muted: var(--bg-input);
+  --muted-foreground: var(--text-muted);
+  --border: var(--border-subtle);
+  --input: var(--border-strong);
   --code-bg: #0e0e12;
   --code-header-bg: #16161c;
   --code-inline-bg: rgba(39, 39, 42, 0.85);
@@ -42,19 +97,29 @@
 
 [data-theme="light"] {
   color-scheme: light;
-  --bg-app: #f4f5f7;
-  --bg-surface: rgba(255, 255, 255, 0.95);
+  --bg-app: #f7f7f9;
+  --bg-surface: rgba(255, 255, 255, 0.94);
   --bg-elevated: #ffffff;
-  --bg-input: #f8fafc;
-  --bg-chip: #eceef2;
-  --bg-chip-hover: #dfe3ea;
+  --bg-input: #f4f4f6;
+  --bg-chip: #ececf0;
+  --bg-chip-hover: #e2e2e8;
   --bg-backdrop: rgba(15, 23, 42, 0.32);
   --border-subtle: #e4e4e7;
-  --border-strong: #cbd5e1;
+  --border-strong: #d4d4d8;
   --text-primary: #18181b;
   --text-secondary: #3f3f46;
   --text-muted: #52525b;
   --text-faint: #71717a;
+  --background: var(--bg-app);
+  --foreground: var(--text-primary);
+  --card: var(--bg-elevated);
+  --card-foreground: var(--text-primary);
+  --popover: var(--bg-elevated);
+  --popover-foreground: var(--text-primary);
+  --muted: var(--bg-input);
+  --muted-foreground: var(--text-muted);
+  --border: var(--border-subtle);
+  --input: var(--border-strong);
   --code-bg: #f8fafc;
   --code-header-bg: #eef2f6;
   --code-inline-bg: #e8edf3;
@@ -674,6 +739,18 @@ a[download]:active,
 
 .gemini-aura {
   box-shadow: 0 0 24px -4px rgba(56, 189, 248, 0.35), 0 0 42px -12px rgba(99, 102, 241, 0.28);
+}
+
+@keyframes flip {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes kitrotate {
+  to {
+    transform: rotate(90deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
