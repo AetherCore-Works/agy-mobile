@@ -163,4 +163,57 @@ func TestDBSettingsJobsAndFTS5(t *testing.T) {
 	if err := reopened.DeletePushSubscription("https://push.example/1"); err != nil {
 		t.Fatalf("DeletePushSubscription failed: %v", err)
 	}
+
+	// 7. Custom Slash Commands seeded once + CRUD + Reset + Conversation Outbox Artifacts
+	slashes, err := reopened.ListSlashCommands()
+	if err != nil || len(slashes) < 5 {
+		t.Fatalf("expected seeded default slash commands, got len=%d err=%v", len(slashes), err)
+	}
+	createdSC, err := reopened.CreateSlashCommand(SlashCommand{
+		ID:             "sc-deploy",
+		Command:        "/deploy",
+		Description:    "Deploy staging",
+		PromptTemplate: "Deploy {{input}}",
+		Model:          "gemini-4-hydrogen-high",
+		AutoSubmit:     false,
+		SortOrder:      5,
+	})
+	if err != nil || createdSC.Command != "/deploy" || createdSC.AutoSubmit {
+		t.Fatalf("CreateSlashCommand failed: %+v err=%v", createdSC, err)
+	}
+	newDesc := "Deploy production"
+	updatedSC, err := reopened.UpdateSlashCommand("sc-deploy", SlashCommandPatch{Description: &newDesc})
+	if err != nil || updatedSC == nil || updatedSC.Description != "Deploy production" {
+		t.Fatalf("UpdateSlashCommand failed: %+v err=%v", updatedSC, err)
+	}
+	deletedPub, err := reopened.DeleteSlashCommand("preset-publish")
+	if err != nil || !deletedPub {
+		t.Fatalf("DeleteSlashCommand failed: deleted=%v err=%v", deletedPub, err)
+	}
+
+	_ = reopened.Close()
+	reopened2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("second reopen failed: %v", err)
+	}
+	defer reopened2.Close()
+
+	afterRestart, _ := reopened2.ListSlashCommands()
+	for _, sc := range afterRestart {
+		if sc.ID == "preset-publish" {
+			t.Fatalf("deleted preset-publish should not be re-seeded automatically across restarts")
+		}
+	}
+	restored, err := reopened2.RestoreDefaultSlashCommands()
+	if err != nil || len(restored) < 6 {
+		t.Fatalf("RestoreDefaultSlashCommands failed: len=%d err=%v", len(restored), err)
+	}
+
+	if err := reopened2.RecordConversationArtifacts("local-1", "job-art-1", "Gerei o gráfico e o relatório.", []string{"chart.png", "relatorio.pdf", "chart.png"}); err != nil {
+		t.Fatalf("RecordConversationArtifacts failed: %v", err)
+	}
+	arts, err := reopened2.ListConversationArtifacts("local-1")
+	if err != nil || len(arts) != 1 || len(arts[0].Filenames) != 2 {
+		t.Fatalf("ListConversationArtifacts failed: %+v err=%v", arts, err)
+	}
 }

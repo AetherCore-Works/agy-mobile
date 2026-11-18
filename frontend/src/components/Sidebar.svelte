@@ -44,6 +44,8 @@
     onNewConversation,
     onConversationDeleted,
     onOpenAutomations,
+    onOpenSlashCommands,
+    slashCommandCount = 0,
     onSettingsSaved,
     onThemeChange,
   }: {
@@ -61,6 +63,8 @@
     onNewConversation: () => void;
     onConversationDeleted?: (id: string) => void;
     onOpenAutomations?: () => void;
+    onOpenSlashCommands?: () => void;
+    slashCommandCount?: number;
     onSettingsSaved: (s: GatewaySettings) => void;
     onThemeChange: (mode: ThemeMode, palette: ThemePalette) => void;
   } = $props();
@@ -782,6 +786,30 @@
             <p class="text-[var(--accent-fg)]">Salvando...</p>
           {/if}
         </div>
+
+        {#if onOpenSlashCommands}
+          <button
+            type="button"
+            onclick={() => {
+              open = false;
+              onOpenSlashCommands?.();
+            }}
+            class="w-full p-2.5 rounded-xl bg-[var(--bg-input)] hover:border-[var(--border-strong)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-semibold flex items-center justify-between gap-2 transition-all active:scale-[0.98]"
+          >
+            <div class="flex items-center gap-2">
+              <Icon name="terminal" size={15} class="text-[var(--accent-fg)]" />
+              <span>Comandos Slash (/)</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              {#if slashCommandCount > 0}
+                <Badge variant="accent" size="xs" class="font-mono">
+                  {slashCommandCount}
+                </Badge>
+              {/if}
+              <Icon name="chevron-down" size={14} class="-rotate-90 text-[var(--text-faint)]" />
+            </div>
+          </button>
+        {/if}
 
         {#if onOpenAutomations}
           <button

@@ -4,6 +4,8 @@
   import { cubicOut } from "svelte/easing";
   import Icon from "./Icon.svelte";
   import AiSpinner from "./AiSpinner.svelte";
+  import OutboxInlinePreview from "./OutboxInlinePreview.svelte";
+  import type { PreviewTarget } from "./OutboxPreviewModal.svelte";
   import { Button } from "../lib/components/ui/button/index.js";
   import { Card } from "../lib/components/ui/card/index.js";
   import { Badge } from "../lib/components/ui/badge/index.js";
@@ -20,7 +22,9 @@
     uploadFile,
     type ChatMessage,
     type ModelInfo,
+    type OutboxFile,
     type PermissionMode,
+    type SlashCommandItem,
   } from "../lib/api";
   import {
     CHECK_ICON_SVG,
@@ -43,9 +47,15 @@
     features,
     defaultModel,
     defaultPermission,
+    slashCommands = [],
+    outboxFiles = [],
+    outboxLoaded = false,
     onOpenShare,
     onRequestDelete,
     onOpenTerminal,
+    onOpenSlashManager,
+    onOutboxRefresh,
+    onOpenMediaPreview,
     onFocus,
     onMetaChange,
     onGeneratingChange,
@@ -62,6 +72,9 @@
     features: Record<string, any>;
     defaultModel: string;
     defaultPermission: PermissionMode;
+    slashCommands?: SlashCommandItem[];
+    outboxFiles?: OutboxFile[];
+    outboxLoaded?: boolean;
     onOpenShare: (
       title: string,
       singleMarkdown: string,
@@ -69,6 +82,9 @@
     ) => void;
     onRequestDelete?: (convId: string, title: string) => void;
     onOpenTerminal: () => void;
+    onOpenSlashManager?: () => void;
+    onOutboxRefresh?: () => Promise<void> | void;
+    onOpenMediaPreview?: (target: PreviewTarget) => void;
     onFocus: () => void;
     onMetaChange?: (
       tabId: string,
@@ -152,7 +168,7 @@
     showScrollBottomBtn = distanceFromBottom > 120;
   }
 
-  const slashCommands = [
+  const builtinSlashCommands = [
     { cmd: "/usage", desc: "Cota restante de tokens/modelos" },
     { cmd: "/compact", desc: "Compactar histórico da sessão" },
     { cmd: "/diff", desc: "Exibir git status e diff atual" },
@@ -161,6 +177,50 @@
     { cmd: "/clear", desc: "Limpar e iniciar nova conversa" },
     { cmd: "/status", desc: "Status do Watchdog & recursos" },
   ];
+
+  type PaletteCommandEntry = {
+    cmd: string;
+    desc: string;
+    custom?: SlashCommandItem;
+  };
+
+  let slashFilterToken = $derived.by(() => {
+    const trimmed = userInput.trimStart();
+    if (!trimmed.startsWith("/")) return "";
+    return trimmed.split(/\s+/)[0].toLowerCase();
+  });
+
+  let isTypingSlashSelector = $derived.by(() => {
+    const trimmed = userInput.trimStart();
+    return trimmed.startsWith("/") && !/\s/.test(trimmed);
+  });
+
+  let paletteEntries = $derived.by((): PaletteCommandEntry[] => {
+    const all: PaletteCommandEntry[] = [
+      ...slashCommands.map((c) => ({
+        cmd: c.command,
+        desc: c.description || c.prompt_template,
+        custom: c,
+      })),
+      ...builtinSlashCommands.map((b) => ({ cmd: b.cmd, desc: b.desc })),
+    ];
+    if (!slashFilterToken) return all;
+    return all.filter((item) => item.cmd.toLowerCase().startsWith(slashFilterToken));
+  });
+
+  function expandSlashPrompt(template: string, rawArgs: string): string {
+    const args = rawArgs.trim();
+    if (/\{\{\s*input\s*\}\}/i.test(template)) {
+      if (args) {
+        return template.replace(/\{\{\s*input\s*\}\}/gi, args).trim();
+      }
+      return template
+        .replace(/[:\s-]*\{\{\s*input\s*\}\}/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    }
+    return args ? `${template.trim()}\n\n${args}` : template.trim();
+  }
 
   $effect(() => {
     onGeneratingChange?.(tabId, isGenerating);
@@ -360,6 +420,13 @@
                 localStorage.setItem(convStorageKey, ev.conversation_id);
                 notifyMeta();
               }
+              if (Array.isArray(ev.outbox_files) && ev.outbox_files.length > 0) {
+                messages[agentIdx].outbox_files = ev.outbox_files.map((x: any) =>
+                  String(x),
+                );
+                messages = messages;
+                void onOutboxRefresh?.();
+              }
               if (!messages[agentIdx].content.trim()) {
                 if (ev.response && String(ev.response).trim()) {
                   messages[agentIdx].content = String(ev.response).trim();
@@ -420,12 +487,15 @@
   async function submitPromptInternal(
     promptText: string,
     filesToSend: string[] = [],
+    opts?: { modelOverride?: string; displayText?: string },
   ) {
     const text = promptText.trim();
     if ((!text && filesToSend.length === 0) || isGenerating) return;
 
     const displayPrompt =
-      text || `[${filesToSend.length} arquivo(s) enviado(s)]`;
+      opts?.displayText?.trim() ||
+      text ||
+      `[${filesToSend.length} arquivo(s) enviado(s)]`;
     messages = [
       ...messages,
       { role: "user", content: displayPrompt },
@@ -441,10 +511,11 @@
     scrollToBottom();
 
     try {
+      const effectiveModel = opts?.modelOverride?.trim() || selectedModel;
       const job = await createJob({
         prompt: text || "Analise os arquivos anexados.",
         conversation_id: conversationId,
-        model: selectedModel,
+        model: effectiveModel,
         permission_mode: permissionMode,
         attached_files: filesToSend.length > 0 ? filesToSend : undefined,
       });
@@ -482,21 +553,81 @@
     if ((!text && attachedFiles.length === 0) || isGenerating) return;
     const filesToSend = attachedFiles.map((f) => f.path);
 
+    slashMenuOpen = false;
     userInput = "";
     attachedFiles = [];
     if (textareaEl) textareaEl.style.height = "auto";
+
+    if (text.startsWith("/")) {
+      const spaceIdx = text.search(/\s/);
+      const cmdToken = (spaceIdx === -1 ? text : text.slice(0, spaceIdx)).toLowerCase();
+      const rawArgs = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+
+      const customCmd = slashCommands.find(
+        (c) => c.command.toLowerCase() === cmdToken,
+      );
+      if (customCmd) {
+        const expanded = expandSlashPrompt(customCmd.prompt_template, rawArgs);
+        await submitPromptInternal(expanded, filesToSend, {
+          modelOverride: customCmd.model || undefined,
+          displayText: text,
+        });
+        return;
+      }
+
+      if (
+        !rawArgs &&
+        filesToSend.length === 0 &&
+        builtinSlashCommands.some((b) => b.cmd === cmdToken)
+      ) {
+        await runSlashCommand(cmdToken);
+        return;
+      }
+    }
 
     await submitPromptInternal(text, filesToSend);
   }
 
   async function runSlashCommand(cmd: string) {
+    const normalized = cmd.toLowerCase();
+    const trimmedInput = userInput.trim();
+    let inlineArgs = "";
+    if (trimmedInput.toLowerCase().startsWith(normalized)) {
+      inlineArgs = trimmedInput.slice(normalized.length).trim();
+    }
+
+    const customCmd = slashCommands.find(
+      (c) => c.command.toLowerCase() === normalized,
+    );
+    if (customCmd) {
+      slashMenuOpen = false;
+      if (!customCmd.auto_submit && !inlineArgs) {
+        userInput = `${customCmd.command} `;
+        await tick();
+        syncTextareaHeight();
+        textareaEl?.focus();
+        return;
+      }
+      userInput = "";
+      if (textareaEl) textareaEl.style.height = "auto";
+      const expanded = expandSlashPrompt(customCmd.prompt_template, inlineArgs);
+      await submitPromptInternal(expanded, [], {
+        modelOverride: customCmd.model || undefined,
+        displayText: inlineArgs
+          ? `${customCmd.command} ${inlineArgs}`
+          : customCmd.command,
+      });
+      return;
+    }
+
     slashMenuOpen = false;
     userInput = "";
-    if (cmd === "/clear") {
+    if (textareaEl) textareaEl.style.height = "auto";
+    if (normalized === "/clear") {
       newConversation();
       return;
     }
-    if (cmd === "/plan") {
+    if (normalized === "/plan") {
       userTouchedPerm = true;
       permissionMode = "readonly";
       messages = [
@@ -510,18 +641,20 @@
       scrollToBottom();
       return;
     }
-    if (cmd === "/diff") {
+    if (normalized === "/diff") {
       await submitPromptInternal(
         "Execute git status -s e git diff no workspace atual e exiba a saída dentro de um bloco ```diff.",
       );
       return;
     }
-    if (cmd === "/mem") {
+    if (normalized === "/mem") {
       userInput = "Consulte no ai-memory: ";
+      await tick();
+      syncTextareaHeight();
       textareaEl?.focus();
       return;
     }
-    if (cmd === "/status") {
+    if (normalized === "/status") {
       const [wd, feat] = await Promise.all([fetchWatchdog(), fetchFeatures()]);
       const summary = [
         `### Status do Gateway (v${feat.version})`,
@@ -536,7 +669,7 @@
       scrollToBottom();
       return;
     }
-    if (cmd === "/compact" && !conversationId) {
+    if (normalized === "/compact" && !conversationId) {
       messages = [
         ...messages,
         {
@@ -1179,6 +1312,15 @@
                     >
                       {@html renderMarkdown(msg.content)}
                     </div>
+                    {#if !isActiveBubble && (msg.content.trim() || (msg.outbox_files && msg.outbox_files.length > 0))}
+                      <OutboxInlinePreview
+                        content={msg.content}
+                        messageFiles={msg.outbox_files}
+                        {outboxFiles}
+                        {outboxLoaded}
+                        onOpenPreview={onOpenMediaPreview}
+                      />
+                    {/if}
                     {#if isActiveBubble}
                       <div
                         class="mt-2.5 pt-2 border-t border-border space-y-1.5 text-[11px] text-muted-foreground"
@@ -1328,26 +1470,58 @@
       {/if}
 
       <!-- Slash Commands Palette -->
-      {#if slashMenuOpen || userInput.startsWith("/")}
+      {#if slashMenuOpen || isTypingSlashSelector}
         <div transition:fly={{ y: 8, duration: 150, easing: cubicOut }}>
           <Card
             variant="mixed"
-            class="p-1.5 space-y-1 max-h-48 overflow-y-auto shadow-xl"
+            class="p-1.5 space-y-1 max-h-60 overflow-y-auto shadow-xl"
           >
-            {#each slashCommands.filter((c) => !userInput.startsWith("/") || c.cmd.startsWith(userInput
-                    .trim()
-                    .toLowerCase())) as item}
-              <button
-                type="button"
-                onclick={() => runSlashCommand(item.cmd)}
-                class="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-secondary/80 flex items-center justify-between gap-2 text-xs transition-colors"
-              >
-                <Kbd class="text-accent-foreground border-[var(--accent-border)] bg-accent/60 px-1.5">{item.cmd}</Kbd>
-                <span class="text-muted-foreground text-[11px] truncate"
-                  >{item.desc}</span
+            <div
+              class="px-2 py-1 border-b border-border/60 flex items-center justify-between gap-2"
+            >
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Comandos Slash (/)
+              </span>
+              {#if onOpenSlashManager}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onclick={() => {
+                    slashMenuOpen = false;
+                    onOpenSlashManager?.();
+                  }}
+                  class="h-6 px-2 text-[11px] text-accent-foreground"
                 >
-              </button>
-            {/each}
+                  <Icon name="settings" size={11} />
+                  <span>Gerenciar</span>
+                </Button>
+              {/if}
+            </div>
+            {#if paletteEntries.length === 0}
+              <div class="px-2.5 py-2 text-[11px] text-muted-foreground">
+                Nenhum atalho correspondente a "{slashFilterToken}".
+              </div>
+            {:else}
+              {#each paletteEntries as item (item.cmd)}
+                <button
+                  type="button"
+                  onclick={() => runSlashCommand(item.cmd)}
+                  class="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-secondary/80 flex items-center justify-between gap-2 text-xs transition-colors"
+                >
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <Kbd class="text-accent-foreground border-[var(--accent-border)] bg-accent/60 px-1.5">{item.cmd}</Kbd>
+                    {#if item.custom}
+                      <Badge variant={item.custom.auto_submit ? "accent" : "outline"} size="xs">
+                        {item.custom.model ? "Rota" : "SQL"}
+                      </Badge>
+                    {/if}
+                  </div>
+                  <span class="text-muted-foreground text-[11px] truncate"
+                    >{item.desc}</span
+                  >
+                </button>
+              {/each}
+            {/if}
           </Card>
         </div>
       {/if}

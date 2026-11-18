@@ -30,6 +30,28 @@ export interface ConversationMetaPatch {
 export interface ChatMessage {
   role: 'user' | 'agent';
   content: string;
+  outbox_files?: string[];
+}
+
+export interface SlashCommandItem {
+  id: string;
+  command: string;
+  description: string;
+  prompt_template: string;
+  model: string;
+  auto_submit: boolean;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SlashCommandPayload {
+  command: string;
+  description: string;
+  prompt_template: string;
+  model?: string;
+  auto_submit: boolean;
+  sort_order?: number;
 }
 
 export interface GatewaySettings {
@@ -191,6 +213,54 @@ export async function fetchOutbox(): Promise<OutboxFile[]> {
   const res = await fetch('/api/outbox');
   const data = await res.json();
   return data.files ?? [];
+}
+
+export function outboxFileUrl(name: string, inline = false): string {
+  const base = `/api/outbox/${encodeURIComponent(name)}`;
+  return inline ? `${base}?inline=1` : base;
+}
+
+export async function fetchSlashCommands(): Promise<SlashCommandItem[]> {
+  const res = await fetch('/api/slash-commands');
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao carregar comandos slash'));
+  const data = (await res.json()) as { commands?: SlashCommandItem[] };
+  return data.commands ?? [];
+}
+
+export async function createSlashCommand(payload: SlashCommandPayload): Promise<SlashCommandItem> {
+  const res = await fetch('/api/slash-commands', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao criar comando slash'));
+  const data = (await res.json()) as { command: SlashCommandItem };
+  return data.command;
+}
+
+export async function updateSlashCommand(id: string, payload: Partial<SlashCommandPayload>): Promise<SlashCommandItem> {
+  const res = await fetch(`/api/slash-commands/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao atualizar comando slash'));
+  const data = (await res.json()) as { command: SlashCommandItem };
+  return data.command;
+}
+
+export async function deleteSlashCommand(id: string): Promise<void> {
+  const res = await fetch(`/api/slash-commands/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao apagar comando slash'));
+}
+
+export async function resetSlashCommands(): Promise<SlashCommandItem[]> {
+  const res = await fetch('/api/slash-commands/reset', { method: 'POST' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao restaurar padrões'));
+  const data = (await res.json()) as { commands?: SlashCommandItem[] };
+  return data.commands ?? [];
 }
 
 export async function deleteOutboxFile(name: string): Promise<void> {

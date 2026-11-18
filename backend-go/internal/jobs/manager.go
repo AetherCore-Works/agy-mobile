@@ -202,6 +202,14 @@ func (m *Manager) detectNewOutboxFiles(ctx context.Context, before map[string]fl
 	return added
 }
 
+func (m *Manager) collectAndRecordOutbox(ctx context.Context, convID, jobID, snippet string, before map[string]float64) []string {
+	newOutbox := m.detectNewOutboxFiles(ctx, before)
+	if len(newOutbox) > 0 && strings.TrimSpace(convID) != "" {
+		_ = m.store.RecordConversationArtifacts(convID, jobID, snippet, newOutbox)
+	}
+	return newOutbox
+}
+
 // StartJob validates/persists a new job and launches its background execution goroutine.
 func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]any, error) {
 	userPrompt := strings.TrimSpace(req.Prompt)
@@ -257,7 +265,7 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 	m.mu.Unlock()
 
 	if engine == "ollama" {
-		go m.runOllamaJob(jobCtx, jobID, *convID, agentPrompt, selectedModel)
+		go m.runOllamaJob(jobCtx, jobID, *convID, userPrompt, agentPrompt, selectedModel)
 	} else if m.cfg.Mode == "ide-bridge" {
 		go m.runIDEBridgeJob(jobCtx, jobID, convID, agentPrompt, selectedModel, permMode)
 	} else {
@@ -296,14 +304,14 @@ func (m *Manager) cleanupJob(jobID string) {
 	m.broadcast(jobID)
 }
 
-func (m *Manager) runOllamaJob(ctx context.Context, jobID, convID, prompt, selectedModel string) {
+func (m *Manager) runOllamaJob(ctx context.Context, jobID, convID, userPrompt, agentPrompt, selectedModel string) {
 	defer m.cleanupJob(jobID)
 
 	ollamaModel := strings.TrimPrefix(selectedModel, "ollama:")
-	title := runner.ExtractConversationTitle(prompt, "Conversa Local", 60)
+	title := runner.ExtractConversationTitle(userPrompt, "Conversa Local", 60)
 	_ = m.store.EnsureLocalConversation(convID, title, selectedModel)
 	prior, _ := m.store.GetLocalMessages(convID)
-	_ = m.store.AppendLocalMessage(convID, "user", prompt)
+	_ = m.store.AppendLocalMessage(convID, "user", userPrompt)
 
 	m.emitEvent(jobID, "init", map[string]any{"type": "init", "conversation_id": convID, "model": selectedModel})
 
@@ -311,7 +319,7 @@ func (m *Manager) runOllamaJob(ctx context.Context, jobID, convID, prompt, selec
 	for _, p := range prior {
 		msgs = append(msgs, map[string]string{"role": p.Role, "content": p.Content})
 	}
-	msgs = append(msgs, map[string]string{"role": "user", "content": prompt})
+	msgs = append(msgs, map[string]string{"role": "user", "content": agentPrompt})
 
 	payload, _ := json.Marshal(map[string]any{
 		"model":    ollamaModel,
@@ -420,6 +428,7 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 	emittedAny := false
 	executedTools := []string{}
 	seenTools := map[string]bool{}
+	var respPreview strings.Builder
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
@@ -480,6 +489,9 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			} else if stepType == "agent_response" {
 				if delta, ok := step["text_delta"].(string); ok && delta != "" {
 					emittedAny = true
+					if respPreview.Len() < 320 {
+						respPreview.WriteString(delta)
+					}
 					m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": delta})
 				}
 			}
@@ -510,19 +522,24 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			if !emittedAny {
 				if finalResp != "" {
 					emittedAny = true
+					if respPreview.Len() == 0 {
+						respPreview.WriteString(finalResp)
+					}
 					m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": finalResp})
 				} else {
 					emittedAny = true
 					m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": formatToolsSummary(executedTools)})
 				}
 			}
-			doneStatus := "completed"
-			_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
 			resStatus, _ := res["status"].(string)
 			if resStatus == "" {
 				resStatus = "SUCCESS"
 			}
-			newOutbox := m.detectNewOutboxFiles(ctx, beforeOutbox)
+			snippet := finalResp
+			if snippet == "" {
+				snippet = respPreview.String()
+			}
+			newOutbox := m.collectAndRecordOutbox(ctx, currentConvID, jobID, snippet, beforeOutbox)
 			m.emitEvent(jobID, "done", map[string]any{
 				"type":            "done",
 				"conversation_id": nullableStr(currentConvID),
@@ -531,6 +548,8 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 				"response":        finalResp,
 				"outbox_files":    newOutbox,
 			})
+			doneStatus := "completed"
+			_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
 		}
 	}
 
@@ -552,10 +571,9 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 		return
 	}
 	if !emittedAny {
-		m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": formatToolsSummary(executedTools)})
-		doneStatus := "completed"
-		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
-		newOutbox := m.detectNewOutboxFiles(ctx, beforeOutbox)
+		summary := formatToolsSummary(executedTools)
+		m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": summary})
+		newOutbox := m.collectAndRecordOutbox(ctx, currentConvID, jobID, summary, beforeOutbox)
 		m.emitEvent(jobID, "done", map[string]any{
 			"type":            "done",
 			"conversation_id": nullableStr(currentConvID),
@@ -563,10 +581,10 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			"executed_tools":  executedTools,
 			"outbox_files":    newOutbox,
 		})
+		doneStatus := "completed"
+		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
 	} else if jobRecord != nil && jobRecord.Status == "running" {
-		doneStatus := "completed"
-		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
-		newOutbox := m.detectNewOutboxFiles(ctx, beforeOutbox)
+		newOutbox := m.collectAndRecordOutbox(ctx, currentConvID, jobID, respPreview.String(), beforeOutbox)
 		m.emitEvent(jobID, "done", map[string]any{
 			"type":            "done",
 			"conversation_id": nullableStr(currentConvID),
@@ -574,6 +592,8 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			"executed_tools":  executedTools,
 			"outbox_files":    newOutbox,
 		})
+		doneStatus := "completed"
+		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
 	}
 
 	m.notifyJobResult(jobID, currentConvID, "completed", "AGY Concluído", fmt.Sprintf("Sessão finalizada (%s).", selectedModel), "default")
