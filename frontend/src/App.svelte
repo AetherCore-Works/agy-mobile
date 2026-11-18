@@ -485,11 +485,13 @@
       if (!shellEl) return;
       const vv = window.visualViewport;
       if (vv && vv.height < window.innerHeight - 80) {
+        shellEl.style.bottom = 'auto';
         shellEl.style.height = `${vv.height}px`;
         shellEl.style.top = `${vv.offsetTop}px`;
       } else {
-        shellEl.style.height = "100dvh";
-        shellEl.style.top = "0px";
+        shellEl.style.top = '0px';
+        shellEl.style.bottom = '0px';
+        shellEl.style.height = '';
       }
     };
     syncViewport();
@@ -573,8 +575,8 @@
 
 <div
   bind:this={shellEl}
-  style="height: 100dvh; will-change: transform, height;"
-  class="fixed inset-x-0 top-0 w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-[var(--bg-app)] text-[var(--text-primary)] theme-surface"
+  style="will-change: transform, height;"
+  class="fixed inset-0 w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-[var(--bg-app)] text-[var(--text-primary)] theme-surface"
 >
   <!-- Header -->
   <header
