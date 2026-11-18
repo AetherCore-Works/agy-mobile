@@ -48,9 +48,10 @@ type ConversationSummary struct {
 
 // ConversationMessage represents one message in a conversation transcript.
 type ConversationMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Role        string   `json:"role"`
+	Content     string   `json:"content"`
+	Timestamp   string   `json:"timestamp,omitempty"`
+	OutboxFiles []string `json:"outbox_files,omitempty"`
 }
 
 // ConversationDetail mirrors /api/conversations/{id}.

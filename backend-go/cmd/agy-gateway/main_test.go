@@ -859,3 +859,134 @@ func TestAutomationsCronAlertsAndWebPushRoutes(t *testing.T) {
 		t.Fatalf("DELETE /api/automations got %d", delAutoResp.StatusCode)
 	}
 }
+
+func TestCustomSlashCommandsAndOutboxInlinePreview(t *testing.T) {
+	mux, store, cfg := newTestServer(t)
+
+	// 1. Seeded slash commands + create/validate/update/delete/reset
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/slash-commands", nil))
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), "/publish") {
+		t.Fatalf("GET /api/slash-commands unexpected response: code=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	// Reserved built-in blocked
+	badBuiltinRec := httptest.NewRecorder()
+	mux.ServeHTTP(badBuiltinRec, httptest.NewRequest(http.MethodPost, "/api/slash-commands", strings.NewReader(`{"command":"/diff","prompt_template":"nope"}`)))
+	if badBuiltinRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for reserved built-in /diff, got %d", badBuiltinRec.Code)
+	}
+
+	// Create custom command (normalizes missing slash & uppercase)
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, httptest.NewRequest(http.MethodPost, "/api/slash-commands", strings.NewReader(`{
+		"command":"Logs_Api",
+		"description":"Analisar logs recentes",
+		"prompt_template":"Inspect {{input}} logs",
+		"model":"gemini-4-hydrogen-high",
+		"auto_submit":false
+	}`)))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/slash-commands expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var createRes struct {
+		Command db.SlashCommand `json:"command"`
+	}
+	_ = json.Unmarshal(createRec.Body.Bytes(), &createRes)
+	if createRes.Command.Command != "/logs_api" || createRes.Command.AutoSubmit {
+		t.Fatalf("unexpected normalized slash command: %+v", createRes.Command)
+	}
+
+	// Duplicate command conflict
+	dupRec := httptest.NewRecorder()
+	mux.ServeHTTP(dupRec, httptest.NewRequest(http.MethodPost, "/api/slash-commands", strings.NewReader(`{"command":"/logs_api","prompt_template":"dup"}`)))
+	if dupRec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate slash command, got %d", dupRec.Code)
+	}
+
+	// Partial PUT update
+	putRec := httptest.NewRecorder()
+	mux.ServeHTTP(putRec, httptest.NewRequest(http.MethodPut, "/api/slash-commands/"+createRes.Command.ID, strings.NewReader(`{"description":"Logs de produção"}`)))
+	if putRec.Code != http.StatusOK || !strings.Contains(putRec.Body.String(), "Logs de produção") {
+		t.Fatalf("PUT /api/slash-commands expected 200 updated description, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+
+	// Delete custom command
+	delRec := httptest.NewRecorder()
+	mux.ServeHTTP(delRec, httptest.NewRequest(http.MethodDelete, "/api/slash-commands/"+createRes.Command.ID, nil))
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/slash-commands got %d", delRec.Code)
+	}
+
+	// Reset defaults returns seeded commands cleanly
+	resetRec := httptest.NewRecorder()
+	mux.ServeHTTP(resetRec, httptest.NewRequest(http.MethodPost, "/api/slash-commands/reset", nil))
+	if resetRec.Code != http.StatusOK || !strings.Contains(resetRec.Body.String(), "/summarize") {
+		t.Fatalf("POST /api/slash-commands/reset got %d: %s", resetRec.Code, resetRec.Body.String())
+	}
+
+	// 2. Outbox inline image / PDF serving vs attachment download
+	if err := os.WriteFile(filepath.Join(cfg.Dirs.OutboxDir, "preview.png"), []byte("\x89PNG\r\n\x1a\nfakepng"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Dirs.OutboxDir, "doc.pdf"), []byte("%PDF-1.4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Dirs.OutboxDir, "icon.svg"), []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	imgInlineRec := httptest.NewRecorder()
+	mux.ServeHTTP(imgInlineRec, httptest.NewRequest(http.MethodGet, "/api/outbox/preview.png?inline=1", nil))
+	if imgInlineRec.Code != http.StatusOK ||
+		imgInlineRec.Header().Get("Content-Type") != "image/png" ||
+		!strings.HasPrefix(imgInlineRec.Header().Get("Content-Disposition"), "inline;") {
+		t.Fatalf("unexpected inline png headers: code=%d ct=%q cd=%q", imgInlineRec.Code, imgInlineRec.Header().Get("Content-Type"), imgInlineRec.Header().Get("Content-Disposition"))
+	}
+
+	pdfInlineRec := httptest.NewRecorder()
+	mux.ServeHTTP(pdfInlineRec, httptest.NewRequest(http.MethodGet, "/api/outbox/doc.pdf?inline=1", nil))
+	if pdfInlineRec.Code != http.StatusOK ||
+		pdfInlineRec.Header().Get("Content-Type") != "application/pdf" ||
+		!strings.HasPrefix(pdfInlineRec.Header().Get("Content-Disposition"), "inline;") {
+		t.Fatalf("unexpected inline pdf headers: code=%d ct=%q cd=%q", pdfInlineRec.Code, pdfInlineRec.Header().Get("Content-Type"), pdfInlineRec.Header().Get("Content-Disposition"))
+	}
+
+	svgInlineRec := httptest.NewRecorder()
+	mux.ServeHTTP(svgInlineRec, httptest.NewRequest(http.MethodGet, "/api/outbox/icon.svg?inline=1", nil))
+	if svgInlineRec.Header().Get("Content-Security-Policy") != "default-src 'none'" {
+		t.Fatalf("expected strict CSP on inline svg, got %q", svgInlineRec.Header().Get("Content-Security-Policy"))
+	}
+
+	dlRec := httptest.NewRecorder()
+	mux.ServeHTTP(dlRec, httptest.NewRequest(http.MethodGet, "/api/outbox/preview.png", nil))
+	if !strings.HasPrefix(dlRec.Header().Get("Content-Disposition"), "attachment;") {
+		t.Fatalf("expected attachment disposition without ?inline=1, got %q", dlRec.Header().Get("Content-Disposition"))
+	}
+
+	// 3. Reloading conversation attaches recorded Outbox artifacts onto matching assistant message
+	if err := store.EnsureLocalConversation("local-art-1", "Gráficos", "ollama:qwen3:8b"); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.AppendLocalMessage("local-art-1", "user", "Gere o gráfico e o PDF")
+	_ = store.AppendLocalMessage("local-art-1", "assistant", "Aqui estão os arquivos: preview.png e doc.pdf")
+	if err := store.RecordConversationArtifacts("local-art-1", "job-123", "Aqui estão os arquivos: preview.png", []string{"preview.png", "doc.pdf"}); err != nil {
+		t.Fatal(err)
+	}
+
+	convRec := httptest.NewRecorder()
+	mux.ServeHTTP(convRec, httptest.NewRequest(http.MethodGet, "/api/conversations/local-art-1", nil))
+	if convRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/conversations/local-art-1 got %d", convRec.Code)
+	}
+	var convBody struct {
+		Messages []struct {
+			Role        string   `json:"role"`
+			OutboxFiles []string `json:"outbox_files"`
+		} `json:"messages"`
+	}
+	_ = json.Unmarshal(convRec.Body.Bytes(), &convBody)
+	if len(convBody.Messages) != 2 || len(convBody.Messages[1].OutboxFiles) != 2 {
+		t.Fatalf("expected outbox_files attached on assistant message, got %+v", convBody.Messages)
+	}
+}

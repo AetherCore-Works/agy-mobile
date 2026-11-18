@@ -35,6 +35,7 @@ func (m *Manager) runIDEBridgeJob(ctx context.Context, jobID string, convID *str
 	bridgeBase := m.cfg.IDEBridgeDir
 	inboxDir := filepath.Join(bridgeBase, "inbox")
 	outboxDir := filepath.Join(bridgeBase, "outbox")
+	beforeOutbox := m.snapshotOutbox(ctx)
 	if err := os.MkdirAll(inboxDir, 0o755); err != nil {
 		m.failJob(jobID, "", ctx, fmt.Sprintf("Erro ao criar IDE bridge inbox: %v", err))
 		return
@@ -119,15 +120,17 @@ func (m *Manager) runIDEBridgeJob(ctx context.Context, jobID string, convID *str
 				text = "*Tarefa processada via IDE Bridge.*"
 			}
 			m.emitEvent(jobID, "delta", map[string]any{"type": "delta", "text": text})
-			doneStatus := "completed"
-			_ = m.store.UpdateJob(jobID, &cid, &doneStatus, nil)
+			newOutbox := m.collectAndRecordOutbox(ctx, cid, jobID, text, beforeOutbox)
 			m.emitEvent(jobID, "done", map[string]any{
 				"type":            "done",
 				"conversation_id": cid,
 				"status":          "SUCCESS",
 				"executed_tools":  []string{"ide_bridge"},
 				"response":        text,
+				"outbox_files":    newOutbox,
 			})
+			doneStatus := "completed"
+			_ = m.store.UpdateJob(jobID, &cid, &doneStatus, nil)
 			m.notifyJobResult(jobID, cid, "completed", "AGY (IDE Bridge) Concluído", text, "default")
 			return
 		}

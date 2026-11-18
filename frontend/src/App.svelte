@@ -8,8 +8,10 @@
   import Sidebar from "./components/Sidebar.svelte";
   import TerminalModal from "./components/TerminalModal.svelte";
   import OutboxModal from "./components/OutboxModal.svelte";
+  import OutboxPreviewModal, { type PreviewTarget } from "./components/OutboxPreviewModal.svelte";
   import ShareModal from "./components/ShareModal.svelte";
   import AutomationsModal from "./components/AutomationsModal.svelte";
+  import SlashCommandsModal from "./components/SlashCommandsModal.svelte";
   import { Button } from "./lib/components/ui/button/index.js";
   import { Card } from "./lib/components/ui/card/index.js";
   import { Badge } from "./lib/components/ui/badge/index.js";
@@ -21,6 +23,7 @@
     fetchModels,
     fetchOutbox,
     fetchSettings,
+    fetchSlashCommands,
     fetchStatus,
     registerGatewayServiceWorker,
     showBrowserNotification,
@@ -32,6 +35,7 @@
     type ModelInfo,
     type OutboxFile,
     type PermissionMode,
+    type SlashCommandItem,
   } from "./lib/api";
   import {
     THEME_PALETTES,
@@ -302,7 +306,11 @@
   let terminalOpen = $state(false);
   let outboxOpen = $state(false);
   let outboxFiles = $state<OutboxFile[]>([]);
+  let outboxLoaded = $state(false);
+  let mediaPreviewTarget = $state<PreviewTarget | null>(null);
   let automationsOpen = $state(false);
+  let slashModalOpen = $state(false);
+  let slashCommands = $state<SlashCommandItem[]>([]);
   let unreadAlerts = $state(0);
 
   // Share Snapshot Modal
@@ -369,6 +377,7 @@
     }
     try {
       outboxFiles = await fetchOutbox();
+      outboxLoaded = true;
     } catch {
       // ignore
     }
@@ -497,6 +506,12 @@
     syncViewport();
     window.visualViewport?.addEventListener("resize", syncViewport);
     window.visualViewport?.addEventListener("scroll", syncViewport);
+
+    void fetchSlashCommands()
+      .then((cmds) => {
+        slashCommands = cmds;
+      })
+      .catch(() => {});
 
     void (async () => {
       const [loadedSettings, loadedModels, loadedFeatures] = await Promise.all([
@@ -976,9 +991,15 @@
         {features}
         {defaultModel}
         {defaultPermission}
+        {slashCommands}
+        {outboxFiles}
+        {outboxLoaded}
         onOpenShare={openShareModal}
         onRequestDelete={requestDeleteConversation}
         onOpenTerminal={() => (terminalOpen = true)}
+        onOpenSlashManager={() => (slashModalOpen = true)}
+        onOutboxRefresh={refreshStatusAndOutbox}
+        onOpenMediaPreview={(target) => (mediaPreviewTarget = target)}
         onFocus={() => {
           if (splitOpen) {
             focusedSide = tab.id === rightTabId ? "right" : "left";
@@ -1010,6 +1031,8 @@
   }}
   onConversationDeleted={handleConversationDeleted}
   onOpenAutomations={() => (automationsOpen = true)}
+  onOpenSlashCommands={() => (slashModalOpen = true)}
+  slashCommandCount={slashCommands.length}
   onThemeChange={setTheme}
   onSettingsSaved={(s) => {
     defaultPermission = s.default_permission_mode;
@@ -1024,6 +1047,12 @@
     : "Remote Terminal"}
 />
 <OutboxModal bind:open={outboxOpen} bind:files={outboxFiles} {outboxDir} />
+<OutboxPreviewModal bind:target={mediaPreviewTarget} />
+<SlashCommandsModal
+  bind:open={slashModalOpen}
+  bind:commands={slashCommands}
+  {models}
+/>
 <ShareModal
   bind:open={shareOpen}
   title={shareTitle}
