@@ -27,12 +27,14 @@
     watchdogEnabled = true,
     telemetryEnabled = false,
     cockpitEnabled = false,
+    unreadAlerts = 0,
     themeMode,
     themePalette,
     settings = $bindable<GatewaySettings>(),
     onSelectConversation,
     onNewConversation,
     onConversationDeleted,
+    onOpenAutomations,
     onSettingsSaved,
     onThemeChange,
   }: {
@@ -42,12 +44,14 @@
     watchdogEnabled?: boolean;
     telemetryEnabled?: boolean;
     cockpitEnabled?: boolean;
+    unreadAlerts?: number;
     themeMode: ThemeMode;
     themePalette: ThemePalette;
     settings: GatewaySettings;
     onSelectConversation: (id: string, title?: string) => void;
     onNewConversation: () => void;
     onConversationDeleted?: (id: string) => void;
+    onOpenAutomations?: () => void;
     onSettingsSaved: (s: GatewaySettings) => void;
     onThemeChange: (mode: ThemeMode, palette: ThemePalette) => void;
   } = $props();
@@ -621,6 +625,29 @@
             <p class="text-[var(--accent-fg)]">Salvando...</p>
           {/if}
         </div>
+
+        {#if onOpenAutomations}
+          <button
+            type="button"
+            onclick={() => {
+              open = false;
+              onOpenAutomations?.();
+            }}
+            class="w-full p-2.5 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-fg)] text-xs font-semibold flex items-center justify-between gap-2 transition-all active:scale-[0.98]"
+          >
+            <div class="flex items-center gap-2">
+              <Icon name="bell" size={15} />
+              <span>Automações Cron & Alertas</span>
+            </div>
+            {#if unreadAlerts > 0}
+              <span class="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+                {unreadAlerts}
+              </span>
+            {:else}
+              <Icon name="chevron-down" size={14} class="-rotate-90" />
+            {/if}
+          </button>
+        {/if}
 
         {#if watchdogEnabled && watchdog}
           <div class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-1.5 theme-surface">

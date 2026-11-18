@@ -37,7 +37,9 @@ export type IconName =
   | 'columns'
   | 'compare'
   | 'tag'
-  | 'link';
+  | 'link'
+  | 'bell'
+  | 'play';
 
 export interface IconShape {
   tag: 'path' | 'circle' | 'rect' | 'line' | 'polyline' | 'polygon';
@@ -222,6 +224,13 @@ const ICONS: Record<IconName, IconShape[]> = {
   link: [
     { tag: 'path', attrs: { d: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' } },
     { tag: 'path', attrs: { d: 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' } },
+  ],
+  bell: [
+    { tag: 'path', attrs: { d: 'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9' } },
+    { tag: 'path', attrs: { d: 'M13.73 21a2 2 0 0 1-3.46 0' } },
+  ],
+  play: [
+    { tag: 'polygon', attrs: { points: '5 3 19 12 5 21 5 3' } },
   ],
 };
 

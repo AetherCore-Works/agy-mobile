@@ -36,15 +36,35 @@ type CreateRequest struct {
 	AttachedFiles  []string `json:"attached_files"`
 }
 
+// JobFinishNotice describes a completed or failed background job for active alerts.
+type JobFinishNotice struct {
+	JobID          string
+	ConversationID string
+	Engine         string
+	Model          string
+	Status         string // "completed" | "error"
+	Summary        string
+	Elapsed        time.Duration
+}
+
+type jobRunMeta struct {
+	startedAt time.Time
+	engine    string
+	model     string
+}
+
 // Manager coordinates async job execution, cancellation, and SSE broadcast signals.
 type Manager struct {
 	cfg    config.GatewaySettings
 	store  *db.GatewayDB
 	runner runner.Runner
 
+	OnJobFinish func(JobFinishNotice)
+
 	mu        sync.Mutex
 	cancels   map[string]context.CancelFunc
 	notifiers map[string]chan struct{}
+	meta      map[string]jobRunMeta
 }
 
 // NewManager creates a Manager wired to config, SQLite store, and execution runner.
@@ -55,6 +75,7 @@ func NewManager(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner
 		runner:    r,
 		cancels:   map[string]context.CancelFunc{},
 		notifiers: map[string]chan struct{}{},
+		meta:      map[string]jobRunMeta{},
 	}
 }
 
@@ -228,6 +249,11 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 	if _, ok := m.notifiers[jobID]; !ok {
 		m.notifiers[jobID] = make(chan struct{})
 	}
+	m.meta[jobID] = jobRunMeta{
+		startedAt: time.Now(),
+		engine:    engine,
+		model:     selectedModel,
+	}
 	m.mu.Unlock()
 
 	if engine == "ollama" {
@@ -265,6 +291,7 @@ func (m *Manager) cleanupJob(jobID string) {
 		cancel()
 		delete(m.cancels, jobID)
 	}
+	delete(m.meta, jobID)
 	m.mu.Unlock()
 	m.broadcast(jobID)
 }
@@ -359,7 +386,7 @@ func (m *Manager) runOllamaJob(ctx context.Context, jobID, convID, prompt, selec
 	if preview == "" {
 		preview = "Tarefa finalizada."
 	}
-	go m.sendNtfy("AGY (Local) Concluído", preview, convID, "default")
+	m.notifyJobResult(jobID, convID, "completed", "AGY (Local) Concluído", preview, "default")
 }
 
 func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, prompt, selectedModel, permMode string) {
@@ -549,7 +576,7 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 		})
 	}
 
-	go m.sendNtfy("AGY Concluído", fmt.Sprintf("Sessão finalizada (%s).", selectedModel), currentConvID, "default")
+	m.notifyJobResult(jobID, currentConvID, "completed", "AGY Concluído", fmt.Sprintf("Sessão finalizada (%s).", selectedModel), "default")
 }
 
 func (m *Manager) failJob(jobID, convID string, ctx context.Context, msg string) {
@@ -560,8 +587,34 @@ func (m *Manager) failJob(jobID, convID string, ctx context.Context, msg string)
 	_ = m.store.UpdateJob(jobID, strPtrOrNil(convID), &errStatus, &msg)
 	m.emitEvent(jobID, "error", map[string]any{"type": "error", "error": msg})
 	if !errors.Is(ctx.Err(), context.Canceled) {
-		go m.sendNtfy("AGY Erro", msg, convID, "high")
+		m.notifyJobResult(jobID, convID, "error", "AGY Erro", msg, "high")
 	}
+}
+
+func (m *Manager) notifyJobResult(jobID, convID, status, ntfyTitle, summary, ntfyPriority string) {
+	m.mu.Lock()
+	meta, ok := m.meta[jobID]
+	delete(m.meta, jobID)
+	cb := m.OnJobFinish
+	m.mu.Unlock()
+
+	if cb != nil {
+		var elapsed time.Duration
+		if ok && !meta.startedAt.IsZero() {
+			elapsed = time.Since(meta.startedAt)
+		}
+		go cb(JobFinishNotice{
+			JobID:          jobID,
+			ConversationID: convID,
+			Engine:         meta.engine,
+			Model:          meta.model,
+			Status:         status,
+			Summary:        summary,
+			Elapsed:        elapsed,
+		})
+		return
+	}
+	go m.sendNtfy(ntfyTitle, summary, convID, ntfyPriority)
 }
 
 func (m *Manager) sendNtfy(title, message, convID, priority string) {

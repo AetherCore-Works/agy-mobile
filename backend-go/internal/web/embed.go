@@ -46,10 +46,13 @@ func RegisterRoutes(mux *http.ServeMux, fsys fs.FS) {
 	})
 
 	mux.HandleFunc("GET /manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 		serveFirstFile(w, r, fsys, "application/manifest+json", "dist/manifest.json", "manifest.json")
 	})
 
 	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Service-Worker-Allowed", "/")
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 		serveFirstFile(w, r, fsys, "application/javascript", "dist/sw.js", "sw.js")
 	})
 

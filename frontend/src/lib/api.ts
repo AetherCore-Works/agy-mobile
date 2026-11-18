@@ -54,7 +54,7 @@ export interface WatchdogState {
   downtime_events: number;
 }
 
-export async function fetchStatus(): Promise<{ online: boolean; target_host: string; target_user: string }> {
+export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
   const res = await fetch('/api/status');
   return res.json();
 }
@@ -215,4 +215,368 @@ export async function createJob(payload: {
 
 export async function cancelJob(jobId: string): Promise<void> {
   await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+}
+
+export interface AutomationItem {
+  id: string;
+  name: string;
+  cron_expr: string;
+  kind: 'prompt' | 'check';
+  prompt: string;
+  model: string;
+  permission_mode: PermissionMode;
+  notify_ntfy: boolean;
+  notify_push: boolean;
+  notify_on: 'always' | 'error_only';
+  enabled: boolean;
+  last_run_at: string;
+  last_status: string;
+  last_summary: string;
+  last_job_id: string;
+  last_conv_id: string;
+  next_run_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertConfig {
+  notify_job_done: boolean;
+  notify_long_job_sec: number;
+  notify_docker_down: boolean;
+  gpu_temp_threshold_c: number;
+  disk_free_min_pct: number;
+  ntfy_topic: string;
+  ntfy_url: string;
+  web_push_enabled: boolean;
+  notify_desktop: boolean;
+}
+
+export interface AlertEvent {
+  id: number;
+  source: string;
+  severity: 'info' | 'ok' | 'warning' | 'error';
+  title: string;
+  message: string;
+  conv_id?: string;
+  job_id?: string;
+  read: boolean;
+  created_at: string;
+}
+
+export interface WebPushStatus {
+  supported: boolean;
+  pushSupported: boolean;
+  subscribed: boolean;
+  permission: NotificationPermission;
+  isIOS: boolean;
+  isAndroid: boolean;
+  isStandalone: boolean;
+  isSecure: boolean;
+}
+
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body && typeof body.detail === 'string' && body.detail.trim()) {
+      return body.detail;
+    }
+  } catch {
+    // ignore
+  }
+  return `${fallback} (HTTP ${res.status})`;
+}
+
+export async function fetchAutomations(): Promise<{ automations: AutomationItem[]; unread_alerts: number }> {
+  const res = await fetch('/api/automations');
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao carregar automações'));
+  return res.json();
+}
+
+export async function createAutomation(payload: {
+  name: string;
+  cron_expr: string;
+  kind: 'prompt' | 'check';
+  prompt: string;
+  model: string;
+  permission_mode: PermissionMode;
+  notify_ntfy: boolean;
+  notify_push: boolean;
+  notify_on: 'always' | 'error_only';
+  enabled: boolean;
+}): Promise<AutomationItem> {
+  const res = await fetch('/api/automations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao criar automação'));
+  return res.json();
+}
+
+export async function updateAutomation(
+  id: string,
+  patch: Partial<{
+    name: string;
+    cron_expr: string;
+    kind: 'prompt' | 'check';
+    prompt: string;
+    model: string;
+    permission_mode: PermissionMode;
+    notify_ntfy: boolean;
+    notify_push: boolean;
+    notify_on: 'always' | 'error_only';
+    enabled: boolean;
+  }>
+): Promise<AutomationItem> {
+  const res = await fetch(`/api/automations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao atualizar automação'));
+  return res.json();
+}
+
+export async function deleteAutomation(id: string): Promise<void> {
+  const res = await fetch(`/api/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao excluir automação'));
+}
+
+export async function runAutomationNow(id: string): Promise<void> {
+  const res = await fetch(`/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao executar automação'));
+}
+
+export async function fetchAlerts(limit = 40): Promise<{
+  alerts: AlertEvent[];
+  unread_count: number;
+  config: AlertConfig;
+}> {
+  const res = await fetch(`/api/alerts?limit=${limit}`);
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao carregar alertas'));
+  return res.json();
+}
+
+export async function markAlertsRead(id = 0): Promise<{ unread_count: number }> {
+  const res = await fetch('/api/alerts/read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error('Falha ao marcar alertas');
+  return res.json();
+}
+
+export async function clearAlerts(): Promise<void> {
+  await fetch('/api/alerts', { method: 'DELETE' });
+}
+
+export async function saveAlertConfig(cfg: AlertConfig): Promise<AlertConfig> {
+  const res = await fetch('/api/alerts/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao salvar regras'));
+  return res.json();
+}
+
+export async function sendTestAlert(): Promise<{
+  ntfy_sent: boolean;
+  ntfy_error?: string;
+  push_sent: number;
+  push_failed: number;
+  push_error?: string;
+  desktop_sent: boolean;
+  desktop_error?: string;
+  browser_live_sent: number;
+}> {
+  const res = await fetch('/api/alerts/test', { method: 'POST' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha no alerta de teste'));
+  return res.json();
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const buffer = new ArrayBuffer(rawData.length);
+  const outputArray = new Uint8Array(buffer);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+export function getMobilePlatformInfo() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return { isIOS: false, isAndroid: false, isStandalone: false, isSecure: false };
+  }
+  const ua = navigator.userAgent || '';
+  const isIOS =
+    /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+  const isAndroid = /Android/i.test(ua);
+  const isStandalone =
+    (window.navigator as { standalone?: boolean }).standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)').matches === true;
+  return {
+    isIOS,
+    isAndroid,
+    isStandalone,
+    isSecure: Boolean(window.isSecureContext),
+  };
+}
+
+export async function registerGatewayServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+  if (typeof window === 'undefined' || !window.isSecureContext || !('serviceWorker' in navigator)) {
+    return null;
+  }
+  try {
+    return await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+  } catch {
+    return null;
+  }
+}
+
+export async function getWebPushStatus(): Promise<WebPushStatus> {
+  const plat = getMobilePlatformInfo();
+  const supported = plat.isSecure && 'Notification' in window;
+  const pushSupported = supported && 'serviceWorker' in navigator && 'PushManager' in window;
+  if (!supported) {
+    return {
+      supported: false,
+      pushSupported: false,
+      subscribed: false,
+      permission: 'default',
+      ...plat,
+    };
+  }
+  const permission = Notification.permission;
+  let subscribed = false;
+  if (pushSupported) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      subscribed = Boolean(sub);
+    } catch {
+      subscribed = false;
+    }
+  }
+  return { supported: true, pushSupported, subscribed, permission, ...plat };
+}
+
+export async function enableBrowserWebPush(): Promise<{ mode: 'push' | 'foreground'; note?: string }> {
+  const plat = getMobilePlatformInfo();
+  if (plat.isIOS && !plat.isStandalone) {
+    throw new Error('No iPhone/iPad: toque em Compartilhar -> "Adicionar à Tela de Início" no Safari e abra pelo ícone instalado para ativar alertas.');
+  }
+  if (!window.isSecureContext) {
+    throw new Error('Notificações do sistema no celular exigem rota segura HTTPS / domínio próprio (ou localhost no PC).');
+  }
+  if (!('Notification' in window)) {
+    throw new Error('Este navegador não suporta a API Web Notification.');
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') {
+    throw new Error('Permissão de notificação negada no navegador.');
+  }
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return { mode: 'foreground', note: 'Ativo enquanto a aba estiver aberta (Push em segundo plano indisponível).' };
+  }
+
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+
+    const keyRes = await fetch('/api/push/vapid-public-key');
+    if (!keyRes.ok) throw new Error('Falha ao obter chave VAPID');
+    const { public_key } = (await keyRes.json()) as { public_key: string };
+
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(public_key),
+      });
+    }
+    const subRes = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sub.toJSON()),
+    });
+    if (!subRes.ok) throw new Error('Falha ao registrar inscrição push no servidor');
+    return { mode: 'push' };
+  } catch (err: any) {
+    return {
+      mode: 'foreground',
+      note: err?.message || 'Notificações no navegador ativas com a aba aberta.',
+    };
+  }
+}
+
+export async function disableBrowserWebPush(): Promise<void> {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+  const sub = reg ? await reg.pushManager.getSubscription() : null;
+  if (!sub) return;
+  const endpoint = sub.endpoint;
+  await sub.unsubscribe();
+  await fetch('/api/push/unsubscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+export function showBrowserNotification(ev: AlertEvent, onOpenConv?: (convId: string) => void): void {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  const tag = `agy-alert-${ev.id}`;
+  const icon = '/static/icon-192.png';
+  try {
+    const n = new Notification(ev.title, {
+      body: ev.message,
+      icon,
+      badge: icon,
+      tag,
+    });
+    n.onclick = () => {
+      window.focus();
+      if (ev.conv_id && onOpenConv) {
+        onOpenConv(ev.conv_id);
+      }
+      n.close();
+    };
+  } catch {
+    if ('serviceWorker' in navigator) {
+      void navigator.serviceWorker
+        .getRegistration('/sw.js')
+        .then((reg) =>
+          reg?.showNotification(ev.title, {
+            body: ev.message,
+            icon,
+            badge: icon,
+            tag,
+            data: { url: ev.conv_id ? `/?conv=${ev.conv_id}` : '/' },
+          }),
+        )
+        .catch(() => {});
+    }
+  }
+}
+
+export async function transcribeAudio(audioBlob: Blob, filename = 'voice.webm'): Promise<string> {
+  const form = new FormData();
+  form.append('file', audioBlob, filename);
+  const res = await fetch('/api/transcribe', {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Falha na transcrição de áudio'));
+  }
+  const data = (await res.json()) as { text?: string };
+  return (data.text || '').trim();
 }
