@@ -102,4 +102,65 @@ func TestDBSettingsJobsAndFTS5(t *testing.T) {
 	if err != nil || loadedSnap == nil || loadedSnap.ThemePalette != "violet" {
 		t.Fatalf("GetSnapshot failed: %+v err=%v", loadedSnap, err)
 	}
+
+	// 6. Automations, AlertConfig, AlertEvents, and PushSubscriptions
+	auto, err := reopened.CreateAutomation(Automation{
+		ID:             "auto-1",
+		Name:           "Check diário",
+		CronExpr:       "0 8 * * *",
+		Kind:           "prompt",
+		Prompt:         "verificar disco",
+		Model:          "gemini-4-hydrogen-high",
+		PermissionMode: "readonly",
+		NotifyNtfy:     true,
+		NotifyPush:     true,
+		NotifyOn:       "always",
+		Enabled:        true,
+		NextRunAt:      "2026-11-18T11:00:00Z",
+	})
+	if err != nil || auto.ID != "auto-1" {
+		t.Fatalf("CreateAutomation failed: %+v err=%v", auto, err)
+	}
+	listAuto, err := reopened.ListAutomations()
+	if err != nil || len(listAuto) != 1 || listAuto[0].CronExpr != "0 8 * * *" {
+		t.Fatalf("ListAutomations failed: %+v err=%v", listAuto, err)
+	}
+
+	acfg := DefaultAlertConfig()
+	acfg.GPUTempThresholdC = 79
+	acfg.NtfyTopic = "meu-topico"
+	savedACfg, err := reopened.SaveAlertConfig(acfg)
+	if err != nil || savedACfg.GPUTempThresholdC != 79 || savedACfg.NtfyTopic != "meu-topico" {
+		t.Fatalf("SaveAlertConfig failed: %+v err=%v", savedACfg, err)
+	}
+
+	if _, err := reopened.InsertAlertEvent(AlertEvent{
+		Source:   "gpu",
+		Severity: "warning",
+		Title:    "GPU quente",
+		Message:  "83C atingido",
+	}); err != nil {
+		t.Fatalf("InsertAlertEvent failed: %v", err)
+	}
+	evs, unread, err := reopened.ListAlertEvents(10)
+	if err != nil || len(evs) != 1 || unread != 1 {
+		t.Fatalf("ListAlertEvents failed: len=%d unread=%d err=%v", len(evs), unread, err)
+	}
+	if err := reopened.MarkAlertsRead(0); err != nil {
+		t.Fatalf("MarkAlertsRead failed: %v", err)
+	}
+	if u, _ := reopened.CountUnreadAlerts(); u != 0 {
+		t.Fatalf("expected 0 unread alerts, got %d", u)
+	}
+
+	if err := reopened.UpsertPushSubscription("https://push.example/1", `{"endpoint":"https://push.example/1"}`); err != nil {
+		t.Fatalf("UpsertPushSubscription failed: %v", err)
+	}
+	subs, err := reopened.ListPushSubscriptions()
+	if err != nil || len(subs) != 1 {
+		t.Fatalf("ListPushSubscriptions failed: %+v err=%v", subs, err)
+	}
+	if err := reopened.DeletePushSubscription("https://push.example/1"); err != nil {
+		t.Fatalf("DeletePushSubscription failed: %v", err)
+	}
 }

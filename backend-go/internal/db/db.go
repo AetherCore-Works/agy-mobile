@@ -210,6 +210,43 @@ func (g *GatewayDB) initSchema() error {
 		created_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS automations (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		cron_expr TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT 'prompt',
+		prompt TEXT NOT NULL,
+		model TEXT NOT NULL DEFAULT 'gemini-4-hydrogen-high',
+		permission_mode TEXT NOT NULL DEFAULT 'readonly',
+		notify_ntfy INTEGER NOT NULL DEFAULT 1,
+		notify_push INTEGER NOT NULL DEFAULT 1,
+		notify_on TEXT NOT NULL DEFAULT 'always',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		last_run_at TEXT NOT NULL DEFAULT '',
+		last_status TEXT NOT NULL DEFAULT '',
+		last_summary TEXT NOT NULL DEFAULT '',
+		last_job_id TEXT NOT NULL DEFAULT '',
+		last_conv_id TEXT NOT NULL DEFAULT '',
+		next_run_at TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS alert_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		source TEXT NOT NULL,
+		severity TEXT NOT NULL DEFAULT 'info',
+		title TEXT NOT NULL,
+		message TEXT NOT NULL,
+		conv_id TEXT NOT NULL DEFAULT '',
+		job_id TEXT NOT NULL DEFAULT '',
+		read INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_alert_events_created
+		ON alert_events(id DESC);
+
 	CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
 		USING fts5(conv_id UNINDEXED, title, content, tokenize='unicode61');
 	`

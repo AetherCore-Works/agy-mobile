@@ -38,6 +38,8 @@ type GatewaySettings struct {
 	CockpitToken           string
 	IDEBridgeDir           string
 	IDEBridgeTimeoutSec    int
+	TLSCertFile            string
+	TLSKeyFile             string
 	WebhookSecret          string
 	EvolutionAPIURL        string
 	EvolutionInstance      string
@@ -185,6 +187,8 @@ func Load() GatewaySettings {
 	cockpitURL := envOr("COCKPIT_URL", "")
 	cockpitToken := strings.TrimSpace(os.Getenv("COCKPIT_TOKEN"))
 	bridgeDir := envOr("IDE_BRIDGE_DIR", filepath.Join(dirs.DataDir, "agy-bridge"))
+	tlsCertFile := envOr("TLS_CERT_FILE", "")
+	tlsKeyFile := envOr("TLS_KEY_FILE", "")
 	bridgeTimeout := 180
 	if rawT := envOr("IDE_BRIDGE_TIMEOUT_SEC", ""); rawT != "" {
 		var parsedT int
@@ -232,6 +236,8 @@ func Load() GatewaySettings {
 		"ntfy":         boolEnv("ENABLE_NTFY", false) || envOr("NTFY_TOPIC", "") != "",
 		"whisper":      boolEnv("ENABLE_WHISPER", false) || whisperURL != "",
 		"cockpit":      cockpitEnabled,
+		"automations":  true,
+		"web_push":     true,
 		"ide_bridge":   isIDEBridge,
 		"telemetry":    boolEnv("ENABLE_TELEMETRY", isGateway),
 		"webhooks":     boolEnv("ENABLE_WEBHOOKS", false),
@@ -264,6 +270,8 @@ func Load() GatewaySettings {
 		CockpitToken:           cockpitToken,
 		IDEBridgeDir:           bridgeDir,
 		IDEBridgeTimeoutSec:    bridgeTimeout,
+		TLSCertFile:            tlsCertFile,
+		TLSKeyFile:             tlsKeyFile,
 		WebhookSecret:          envOr("WEBHOOK_SECRET", ""),
 		EvolutionAPIURL:        strings.TrimRight(envOr("EVOLUTION_API_URL", "http://127.0.0.1:8085"), "/"),
 		EvolutionInstance:      envOr("EVOLUTION_INSTANCE", "aegys"),
