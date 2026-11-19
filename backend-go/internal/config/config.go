@@ -155,10 +155,21 @@ func GetAppDirs() AppDirs {
 	}
 }
 
-// Load reads .env (local or parent) and returns normalized GatewaySettings.
+// Load reads .env (local, parent, executable directory, or user DataDir) and returns normalized GatewaySettings.
 func Load() GatewaySettings {
 	loadDotEnv(".env")
 	loadDotEnv("../.env")
+	if _, hasCustomDataDir := os.LookupEnv("DATA_DIR"); !hasCustomDataDir {
+		if exePath, err := os.Executable(); err == nil {
+			exeDir := filepath.Dir(exePath)
+			if !strings.Contains(strings.ToLower(exeDir), "go-build") {
+				loadDotEnv(filepath.Join(exeDir, ".env"))
+			}
+		}
+		loadDotEnv(filepath.Join(GetAppDirs().DataDir, ".env"))
+	} else {
+		loadDotEnv(filepath.Join(GetAppDirs().DataDir, ".env"))
+	}
 
 	inDocker := fileExists("/.dockerenv")
 	envMode := strings.ToLower(envOr("GATEWAY_MODE", ""))

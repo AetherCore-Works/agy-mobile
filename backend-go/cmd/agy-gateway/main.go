@@ -14,9 +14,12 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1226,8 +1229,46 @@ func parseIntQuery(raw string, defVal, minVal, maxVal int) int {
 	return v
 }
 
+func isGatewayHealthyLocal(port string) bool {
+	client := &http.Client{Timeout: 450 * time.Millisecond}
+	resp, err := client.Get("http://127.0.0.1:" + port + "/api/health")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var payload struct {
+		OK      bool   `json:"ok"`
+		Runtime string `json:"runtime"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&payload) != nil {
+		return false
+	}
+	return payload.OK && payload.Runtime == "go"
+}
+
+func openGatewayAppWindow(port string) {
+	targetURL := "http://127.0.0.1:" + port
+	if runtime.GOOS != "windows" {
+		_ = exec.Command("xdg-open", targetURL).Start()
+		return
+	}
+	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL).Start()
+}
+
 func main() {
 	cfg := config.Load()
+
+	shouldOpenBrowser := slices.Contains(os.Args[1:], "--open")
+	if runtime.GOOS == "windows" && cfg.TLSCertFile == "" && strings.TrimSpace(os.Getenv("NO_SINGLE_INSTANCE_OPEN")) == "" {
+		if isGatewayHealthyLocal(cfg.Port) {
+			log.Printf("AGY Mobile Gateway already running on http://127.0.0.1:%s; opening UI...", cfg.Port)
+			openGatewayAppWindow(cfg.Port)
+			return
+		}
+	}
 
 	// Ensure OS-resolved directories exist on startup, mirroring Python main.py.
 	for _, dir := range []string{cfg.Dirs.DataDir, cfg.Dirs.CacheDir, cfg.Dirs.InboxDir, cfg.Dirs.OutboxDir} {
@@ -1286,6 +1327,12 @@ func main() {
 			return
 		}
 		log.Printf("AGY Mobile Gateway (Go %s) listening on http://0.0.0.0:%s [mode=%s]", appVersion, cfg.Port, cfg.Mode)
+		if shouldOpenBrowser {
+			go func() {
+				time.Sleep(350 * time.Millisecond)
+				openGatewayAppWindow(cfg.Port)
+			}()
+		}
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
