@@ -30,12 +30,24 @@ Start-Sleep -Milliseconds 400
 
 if (-not $SkipBuild) {
     Write-Host "==> [2/4] Compilando frontend Svelte 5 e binarios Go..." -ForegroundColor Cyan
-    Push-Location (Join-Path $RepoRoot "frontend")
-    try {
-        npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build falhou ($LASTEXITCODE)" }
-    } finally {
-        Pop-Location
+    $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+    $distIndex = Join-Path $RepoRoot "backend-go\internal\web\static\dist\index.html"
+    if ($npmCmd) {
+        Push-Location (Join-Path $RepoRoot "frontend")
+        try {
+            if (-not (Test-Path "node_modules")) {
+                npm install --no-audit --no-fund
+                if ($LASTEXITCODE -ne 0) { throw "npm install falhou ($LASTEXITCODE)" }
+            }
+            npm run build
+            if ($LASTEXITCODE -ne 0) { throw "npm run build falhou ($LASTEXITCODE)" }
+        } finally {
+            Pop-Location
+        }
+    } elseif (Test-Path $distIndex) {
+        Write-Host "    Aviso: npm nao encontrado; usando bundle web pre-compilado do repositorio." -ForegroundColor Yellow
+    } else {
+        throw "Node.js/npm necessario para compilar o frontend na primeira vez."
     }
 
     $env:CGO_ENABLED = "0"

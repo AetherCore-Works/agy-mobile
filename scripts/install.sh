@@ -23,7 +23,17 @@ mkdir -p "$PREFIX_BIN"
 
 if [[ "$SKIP_BUILD" != "true" ]]; then
   echo "==> [1/4] Compilando frontend Svelte 5..."
-  (cd "$REPO_DIR/frontend" && npm run build)
+  if command -v npm >/dev/null 2>&1; then
+    if [[ ! -d "$REPO_DIR/frontend/node_modules" ]]; then
+      (cd "$REPO_DIR/frontend" && npm install --no-audit --no-fund)
+    fi
+    (cd "$REPO_DIR/frontend" && npm run build)
+  elif [[ -f "$REPO_DIR/backend-go/internal/web/static/dist/index.html" ]]; then
+    echo "    Aviso: npm nao encontrado; usando bundle web pre-compilado do repositorio."
+  else
+    echo "Erro: npm nao encontrado e bundle estatico ausente." >&2
+    exit 1
+  fi
 
   echo "==> [2/4] Compilando agy-gateway e agy-cockpit..."
   (cd "$REPO_DIR/backend-go" && CGO_ENABLED=0 go build -ldflags="-s -w" -o agy-gateway ./cmd/agy-gateway)
