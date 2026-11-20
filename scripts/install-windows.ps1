@@ -1,6 +1,7 @@
 param(
     [switch]$SkipBuild,
     [switch]$NoStart,
+    [switch]$AutoStart,
     [int]$Port = 8088,
     [string]$WorkspaceDir = ""
 )
@@ -194,35 +195,48 @@ if (-not $PsRunner) { $PsRunner = "powershell.exe" }
 
 $StartupVbs = Join-Path $InstallBinDir "agy-startup.vbs"
 $OpenVbs = Join-Path $InstallBinDir "agy-open.vbs"
-Set-Content -Path $StartupVbs -Value ("CreateObject(""WScript.Shell"").Run """"""$PsRunner"""" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DaemonScriptPath"""""", 0, False") -Encoding ASCII
 Set-Content -Path $OpenVbs -Value ("CreateObject(""WScript.Shell"").Run """"""$PsRunner"""" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DaemonScriptPath"""" -OpenApp"", 0, False") -Encoding ASCII
 
 $Wsh = New-Object -ComObject WScript.Shell
 $StartupShortcutLegacy = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\AGY Mobile Gateway.lnk"
-if (Test-Path $StartupShortcutLegacy) {
-    Remove-Item $StartupShortcutLegacy -Force -ErrorAction SilentlyContinue
-}
-
 $TaskName = "AGY-Mobile-Gateway"
 $TaskCreated = $false
-try {
-    $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "//B //NoLogo `"$StartupVbs`"" -WorkingDirectory $InstallBinDir
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "AGY Mobile Gateway, Cockpit e Terminal Web em segundo plano" -Force | Out-Null
-    $TaskCreated = $true
-    Write-Host "    Tarefa agendada '$TaskName' registrada para iniciar no logon do Windows." -ForegroundColor Green
-} catch {
-    $scStartup = $Wsh.CreateShortcut($StartupShortcutLegacy)
-    $scStartup.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-    $scStartup.Arguments = "//B //NoLogo `"$StartupVbs`""
-    $scStartup.WorkingDirectory = $InstallBinDir
-    if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
-        $scStartup.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
+
+if ($AutoStart) {
+    Set-Content -Path $StartupVbs -Value ("CreateObject(""WScript.Shell"").Run """"""$PsRunner"""" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DaemonScriptPath"""""", 0, False") -Encoding ASCII
+    if (Test-Path $StartupShortcutLegacy) {
+        Remove-Item $StartupShortcutLegacy -Force -ErrorAction SilentlyContinue
     }
-    $scStartup.Save()
-    Write-Host "    Atalho de Startup criado em $StartupShortcutLegacy" -ForegroundColor Yellow
+    try {
+        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "//B //NoLogo `"$StartupVbs`"" -WorkingDirectory $InstallBinDir
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "AGY Mobile Gateway, Cockpit e Terminal Web em segundo plano" -Force | Out-Null
+        $TaskCreated = $true
+        Write-Host "    Tarefa agendada '$TaskName' registrada para iniciar no logon do Windows." -ForegroundColor Green
+    } catch {
+        $scStartup = $Wsh.CreateShortcut($StartupShortcutLegacy)
+        $scStartup.TargetPath = "$env:SystemRoot\System32\wscript.exe"
+        $scStartup.Arguments = "//B //NoLogo `"$StartupVbs`""
+        $scStartup.WorkingDirectory = $InstallBinDir
+        if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
+            $scStartup.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
+        }
+        $scStartup.Save()
+        Write-Host "    Atalho de Startup criado em $StartupShortcutLegacy" -ForegroundColor Yellow
+    }
+} else {
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $StartupShortcutLegacy) {
+        Remove-Item $StartupShortcutLegacy -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $StartupVbs) {
+        Remove-Item $StartupVbs -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "    Auto-start ao ligar/logar removido (o AGY so inicia quando voce clicar)." -ForegroundColor Green
 }
 
 $UserAppShortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AGY.lnk"
@@ -275,4 +289,4 @@ if (-not $NoStart) {
     Write-Host ("    Terminal=$($feats.features.terminal) Telemetry=$($feats.features.telemetry) Cockpit=$($feats.features.cockpit) SlashCommands=$($slashes.commands.Count)") -ForegroundColor Green
 }
 
-Write-Host "==> Instalacao Windows concluida! Auto-start no boot ativo e app pronto em http://127.0.0.1:$Port" -ForegroundColor Green
+Write-Host "==> Instalacao Windows concluida! Clique no atalho AGY para abrir (http://127.0.0.1:$Port)." -ForegroundColor Green
