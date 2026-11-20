@@ -22,4 +22,7 @@ func TestLoadReadsDotEnvFromDataDir(t *testing.T) {
 	if cfg.Mods["terminal"] != true || cfg.Mods["telemetry"] != true || cfg.Mods["cockpit"] != true {
 		t.Fatalf("expected terminal/telemetry/cockpit enabled from DataDir .env, got %+v", cfg.Mods)
 	}
+	if DefaultConfigDir() == "" {
+		t.Fatalf("expected non-empty DefaultConfigDir()")
+	}
 }

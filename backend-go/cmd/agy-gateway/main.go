@@ -14,7 +14,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -1249,15 +1248,6 @@ func isGatewayHealthyLocal(port string) bool {
 	return payload.OK && payload.Runtime == "go"
 }
 
-func openGatewayAppWindow(port string) {
-	targetURL := "http://127.0.0.1:" + port
-	if runtime.GOOS != "windows" {
-		_ = exec.Command("xdg-open", targetURL).Start()
-		return
-	}
-	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL).Start()
-}
-
 func main() {
 	if maybeRunConsoleController() {
 		return
@@ -1266,12 +1256,22 @@ func main() {
 	cfg := config.Load()
 
 	shouldOpenBrowser := slices.Contains(os.Args[1:], "--open")
+	withSidecars := slices.Contains(os.Args[1:], "--with-sidecars")
 	if runtime.GOOS == "windows" && !slices.Contains(os.Args[1:], "--daemon") && cfg.TLSCertFile == "" && strings.TrimSpace(os.Getenv("NO_SINGLE_INSTANCE_OPEN")) == "" {
 		if isGatewayHealthyLocal(cfg.Port) {
 			log.Printf("AGY Mobile Gateway already running on http://127.0.0.1:%s; opening UI...", cfg.Port)
 			openGatewayAppWindow(cfg.Port)
 			return
 		}
+	}
+
+	var sidecarSup *consoleSupervisor
+	if withSidecars {
+		sidecarSup = newConsoleSupervisor(cfg)
+		sidecarSup.mu.Lock()
+		sidecarSup.startSidecarsLocked()
+		sidecarSup.mu.Unlock()
+		defer sidecarSup.stopOwnedChildrenOnly()
 	}
 
 	// Ensure OS-resolved directories exist on startup, mirroring Python main.py.

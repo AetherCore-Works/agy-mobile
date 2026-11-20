@@ -1,5 +1,3 @@
-//go:build windows
-
 package main
 
 import (
@@ -11,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -18,46 +17,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
-	"golang.org/x/sys/windows"
 )
-
-const createNoWindowFlag = 0x08000000
-
-var (
-	kernel32DLL         = windows.NewLazySystemDLL("kernel32.dll")
-	procSetConsoleTitle = kernel32DLL.NewProc("SetConsoleTitleW")
-	procSetOutputCP     = kernel32DLL.NewProc("SetConsoleOutputCP")
-)
-
-func setConsoleWindowTitle(title string) {
-	if ptr, err := windows.UTF16PtrFromString(title); err == nil {
-		_, _, _ = procSetConsoleTitle.Call(uintptr(unsafe.Pointer(ptr)))
-	}
-}
-
-func maybeRunConsoleController() bool {
-	args := os.Args[1:]
-	if slices.Contains(args, "--daemon") || envTruthy(os.Getenv("AGY_HEADLESS")) {
-		return false
-	}
-	forceConsole := slices.Contains(args, "--console")
-	if !forceConsole && !isInteractiveConsole() {
-		return false
-	}
-	cfg := config.Load()
-	if isGatewayHealthyLocal(cfg.Port) && strings.TrimSpace(os.Getenv("NO_SINGLE_INSTANCE_OPEN")) == "" {
-		_, _, _ = procSetOutputCP.Call(65001)
-		fmt.Printf("AGY Mobile Gateway já está rodando em http://127.0.0.1:%s. Abrindo no navegador...\n", cfg.Port)
-		openGatewayAppWindow(cfg.Port)
-		time.Sleep(1200 * time.Millisecond)
-		return true
-	}
-	runWindowsConsoleUI(cfg)
-	return true
-}
 
 func envTruthy(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -68,20 +30,126 @@ func envTruthy(raw string) bool {
 	}
 }
 
-func isInteractiveConsole() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
+func maybeRunConsoleController() bool {
+	args := os.Args[1:]
+
+	if slices.Contains(args, "--autostart") || hasArgPrefix(args, "--autostart=") {
+		handleAutostartCLI(args)
+		return true
+	}
+
+	if slices.Contains(args, "--daemon") || envTruthy(os.Getenv("AGY_HEADLESS")) {
 		return false
 	}
-	var mode uint32
-	if err := windows.GetConsoleMode(windows.Handle(os.Stdin.Fd()), &mode); err != nil {
+
+	forceConsole := slices.Contains(args, "--console")
+	if !forceConsole && (envTruthy(os.Getenv("AGY_NO_CONSOLE")) || !isInteractiveConsole()) {
 		return false
 	}
-	var outMode uint32
-	if err := windows.GetConsoleMode(windows.Handle(os.Stdout.Fd()), &outMode); err != nil {
-		return false
+
+	ensureDefaultConfigEnv()
+	cfg := config.Load()
+
+	if isGatewayHealthyLocal(cfg.Port) && strings.TrimSpace(os.Getenv("NO_SINGLE_INSTANCE_OPEN")) == "" {
+		prepareConsoleDisplay()
+		fmt.Printf("AGY Mobile Gateway já está rodando em http://127.0.0.1:%s. Abrindo no navegador...\n", cfg.Port)
+		openGatewayAppWindow(cfg.Port)
+		time.Sleep(1100 * time.Millisecond)
+		return true
 	}
+
+	runControlConsoleUI(cfg)
 	return true
+}
+
+func hasArgPrefix(args []string, prefix string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func handleAutostartCLI(args []string) {
+	action := "status"
+	for i, a := range args {
+		if a == "--autostart" && i+1 < len(args) {
+			action = strings.ToLower(strings.TrimSpace(args[i+1]))
+			break
+		}
+		if strings.HasPrefix(a, "--autostart=") {
+			action = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(a, "--autostart=")))
+			break
+		}
+	}
+
+	ensureDefaultConfigEnv()
+	cfg := config.Load()
+	exePath, err := os.Executable()
+	if err != nil {
+		exePath = "agy-gateway"
+	}
+	workDir := resolveConsoleWorkDir(cfg.Dirs.DataDir)
+
+	switch action {
+	case "on", "enable", "true", "1":
+		if err := setSystemAutoStart(true, exePath, workDir, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Erro ao ativar auto-start: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Auto-Start ativado com sucesso para o logon do sistema.")
+	case "off", "disable", "false", "0":
+		if err := setSystemAutoStart(false, exePath, workDir, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Erro ao desativar auto-start: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Auto-Start desativado.")
+	default:
+		on, detail := isSystemAutoStartEnabled()
+		state := "OFF"
+		if on {
+			state = "ON"
+		}
+		fmt.Printf("Auto-Start: %s (%s)\n", state, detail)
+	}
+}
+
+func ensureDefaultConfigEnv() {
+	if _, custom := os.LookupEnv("DATA_DIR"); custom {
+		return
+	}
+	cfgDir := config.DefaultConfigDir()
+	envPath := filepath.Join(cfgDir, ".env")
+	if _, err := os.Stat(envPath); err == nil {
+		return
+	}
+	// Do not write inside unit tests or go-build temp runs
+	if exe, err := os.Executable(); err == nil {
+		if strings.Contains(strings.ToLower(exe), "go-build") {
+			return
+		}
+	}
+	if _, err := os.Stat(".env"); err == nil {
+		return
+	}
+	_ = os.MkdirAll(cfgDir, 0o755)
+	workDir := resolveConsoleWorkDir(cfgDir)
+	content := strings.Join([]string{
+		"GATEWAY_MODE=standalone",
+		"PORT=8088",
+		"ENABLE_TERMINAL=true",
+		"ENABLE_TELEMETRY=true",
+		"ENABLE_COCKPIT=true",
+		"ENABLE_OLLAMA=true",
+		"COCKPIT_ADDR=127.0.0.1:8099",
+		"COCKPIT_URL=http://127.0.0.1:8099",
+		"COCKPIT_ALLOW_POWER=true",
+		"TTYD_WS_URL=ws://127.0.0.1:7681/terminal/ws",
+		"AGY_WORKSPACE=" + workDir,
+		"",
+	}, "\n")
+	_ = os.WriteFile(envPath, []byte(content), 0o600)
 }
 
 type supervisedChild struct {
@@ -95,98 +163,65 @@ type consoleSupervisor struct {
 	workDir string
 	exePath string
 	logDir  string
-	job     windows.Handle
+	handle  supervisorPlatformHandle
 
-	mu          sync.Mutex
-	children    []*supervisedChild
-	lastNotice  string
-	gatewayDown bool
+	mu         sync.Mutex
+	children   []*supervisedChild
+	lastNotice string
 }
 
 func newConsoleSupervisor(cfg config.GatewaySettings) *consoleSupervisor {
 	exe, err := os.Executable()
 	if err != nil {
-		exe = "agy-gateway.exe"
+		exe = "agy-gateway"
 	}
-	job, _ := createKillOnCloseJob()
 	return &consoleSupervisor{
 		cfg:     cfg,
 		workDir: resolveConsoleWorkDir(cfg.Dirs.DataDir),
 		exePath: exe,
 		logDir:  filepath.Join(cfg.Dirs.DataDir, "logs"),
-		job:     job,
+		handle:  newSupervisorPlatformHandle(),
 	}
 }
 
-func createKillOnCloseJob() (windows.Handle, error) {
-	job, err := windows.CreateJobObject(nil, nil)
-	if err != nil {
-		return 0, err
-	}
-	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(
-		job,
-		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
-		uint32(unsafe.Sizeof(info)),
-	); err != nil {
-		_ = windows.CloseHandle(job)
-		return 0, err
-	}
-	return job, nil
-}
-
-func (s *consoleSupervisor) assignJob(cmd *exec.Cmd) {
-	if s.job == 0 || cmd == nil || cmd.Process == nil {
-		return
-	}
-	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
-	if err != nil {
-		return
-	}
-	defer func() { _ = windows.CloseHandle(h) }()
-	_ = windows.AssignProcessToJobObject(s.job, h)
-}
-
-func (s *consoleSupervisor) closeJob() {
-	if s.job != 0 {
-		_ = windows.CloseHandle(s.job)
-		s.job = 0
-	}
-}
-
-func (s *consoleSupervisor) startAll() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if isGatewayHealthyLocal(s.cfg.Port) && len(s.children) == 0 {
-		s.lastNotice = fmt.Sprintf("Gateway já estava ativo em :%s (aberto externamente).", s.cfg.Port)
-		return
-	}
-
+func (s *consoleSupervisor) startSidecarsLocked() {
 	_ = os.MkdirAll(s.logDir, 0o755)
 	exeDir := filepath.Dir(s.exePath)
 
 	// 1. Optional ttyd terminal
 	if enabled, _ := s.cfg.Mods["terminal"].(bool); enabled && !isLocalPortOpen(7681) {
 		if ttydBin, err := exec.LookPath("ttyd"); err == nil {
-			shellExe := "powershell.exe"
-			if pwsh, err := exec.LookPath("pwsh"); err == nil {
-				shellExe = pwsh
+			var ttydArgs []string
+			if runtime.GOOS == "windows" {
+				shellExe := "powershell.exe"
+				if pwsh, err := exec.LookPath("pwsh"); err == nil {
+					shellExe = pwsh
+				}
+				ttydArgs = []string{"-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "-w", s.workDir, shellExe, "-NoLogo"}
+			} else {
+				shellExe := strings.TrimSpace(os.Getenv("SHELL"))
+				if shellExe == "" {
+					if _, err := exec.LookPath("bash"); err == nil {
+						shellExe = "bash"
+					} else {
+						shellExe = "sh"
+					}
+				}
+				ttydArgs = []string{"-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "-w", s.workDir, shellExe}
 			}
-			_ = s.spawnLocked("ttyd", ttydBin, []string{
-				"-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14",
-				"-w", s.workDir, shellExe, "-NoLogo",
-			}, s.workDir, nil, filepath.Join(s.logDir, "ttyd.log"))
+			_ = s.spawnLocked("ttyd", ttydBin, ttydArgs, s.workDir, nil, filepath.Join(s.logDir, "ttyd.log"))
 		}
 	}
 
 	// 2. Optional Cockpit daemon
 	if enabled, _ := s.cfg.Mods["cockpit"].(bool); enabled && !isLocalPortOpen(8099) {
+		cockpitName := "agy-cockpit"
+		if runtime.GOOS == "windows" {
+			cockpitName = "agy-cockpit.exe"
+		}
 		cockpitCandidates := []string{
-			filepath.Join(exeDir, "agy-cockpit.exe"),
-			filepath.Join(s.workDir, "packages", "cockpit", "agy-cockpit.exe"),
+			filepath.Join(exeDir, cockpitName),
+			filepath.Join(s.workDir, "packages", "cockpit", cockpitName),
 		}
 		for _, c := range cockpitCandidates {
 			if _, err := os.Stat(c); err == nil {
@@ -199,22 +234,36 @@ func (s *consoleSupervisor) startAll() {
 			}
 		}
 	}
+}
 
-	// 3. Gateway daemon
+func (s *consoleSupervisor) startAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if isGatewayHealthyLocal(s.cfg.Port) && len(s.children) == 0 {
+		s.lastNotice = fmt.Sprintf("Gateway já estava ativo em :%s (aberto externamente).", s.cfg.Port)
+		return
+	}
+
+	s.startSidecarsLocked()
+
 	if !isLocalPortOpenStr(s.cfg.Port) {
 		extraEnv := []string{"AGY_HEADLESS=1"}
 		if err := s.spawnLocked("agy-gateway", s.exePath, []string{"--daemon"}, s.workDir, extraEnv, filepath.Join(s.logDir, "gateway.err.log")); err != nil {
 			s.lastNotice = "Erro ao iniciar Gateway: " + err.Error()
 			return
 		}
-		// Wait briefly for HTTP listener readiness
 		ready := false
-		for range 25 {
+		for range 30 {
 			if isGatewayHealthyLocal(s.cfg.Port) {
 				ready = true
 				break
 			}
 			time.Sleep(120 * time.Millisecond)
+		}
+		// Give sibling sidecars a short grace window to finish binding before first paint
+		if !isLocalPortOpen(8099) || !isLocalPortOpen(7681) {
+			time.Sleep(250 * time.Millisecond)
 		}
 		if ready {
 			s.lastNotice = "AGY iniciado e pronto para uso."
@@ -239,7 +288,7 @@ func (s *consoleSupervisor) spawnLocked(name, bin string, args []string, dir str
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), extraEnv...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindowFlag}
+	setChildProcAttrs(cmd)
 	if f != nil {
 		cmd.Stdout = f
 		cmd.Stderr = f
@@ -250,7 +299,7 @@ func (s *consoleSupervisor) spawnLocked(name, bin string, args []string, dir str
 		}
 		return err
 	}
-	s.assignJob(cmd)
+	s.handle.assignChild(cmd)
 
 	child := &supervisedChild{name: name, cmd: cmd, logF: f}
 	s.children = append(s.children, child)
@@ -271,24 +320,39 @@ func (s *consoleSupervisor) stopAll() {
 	s.mu.Unlock()
 
 	for _, ch := range children {
-		if ch.cmd != nil && ch.cmd.Process != nil {
-			_ = ch.cmd.Process.Kill()
-		}
+		terminateChild(ch.cmd)
 		if ch.logF != nil {
 			_ = ch.logF.Close()
 		}
 	}
 	time.Sleep(180 * time.Millisecond)
 	if isLocalPortOpenStr(s.cfg.Port) || isLocalPortOpen(8099) || isLocalPortOpen(7681) {
-		_ = exec.Command("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-			"$p8088=Get-NetTCPConnection -LocalPort "+s.cfg.Port+" -State Listen -EA SilentlyContinue | Select -First 1 -Expand OwningProcess; if($p8088){Stop-Process -Id $p8088 -Force -EA SilentlyContinue}; "+
-				"$p8099=Get-NetTCPConnection -LocalPort 8099 -State Listen -EA SilentlyContinue | Select -First 1 -Expand OwningProcess; if($p8099){Stop-Process -Id $p8099 -Force -EA SilentlyContinue}; "+
-				"$p7681=Get-NetTCPConnection -LocalPort 7681 -State Listen -EA SilentlyContinue | Select -First 1 -Expand OwningProcess; if($p7681){Stop-Process -Id $p7681 -Force -EA SilentlyContinue}",
-		).Run()
+		cleanupPortsFallback(s.cfg.Port)
 		time.Sleep(150 * time.Millisecond)
 	}
 	s.mu.Lock()
 	s.lastNotice = "Tudo encerrado. Modo privacidade ativo."
+	s.mu.Unlock()
+}
+
+func (s *consoleSupervisor) stopOwnedChildrenOnly() {
+	s.mu.Lock()
+	children := s.children
+	s.children = nil
+	s.mu.Unlock()
+
+	for _, ch := range children {
+		terminateChild(ch.cmd)
+		if ch.logF != nil {
+			_ = ch.logF.Close()
+		}
+	}
+	s.handle.closeHandle()
+}
+
+func (s *consoleSupervisor) setNotice(msg string) {
+	s.mu.Lock()
+	s.lastNotice = msg
 	s.mu.Unlock()
 }
 
@@ -298,29 +362,23 @@ func (s *consoleSupervisor) statusNotice() string {
 	return s.lastNotice
 }
 
-func runWindowsConsoleUI(cfg config.GatewaySettings) {
-	_, _, _ = procSetOutputCP.Call(65001)
-	setConsoleWindowTitle("AGY Mobile Gateway - Painel de Controle")
-
-	var origOutMode uint32
-	outHandle := windows.Handle(os.Stdout.Fd())
-	if windows.GetConsoleMode(outHandle, &origOutMode) == nil {
-		_ = windows.SetConsoleMode(outHandle, origOutMode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
-	}
+func runControlConsoleUI(cfg config.GatewaySettings) {
+	prepareConsoleDisplay()
 
 	sup := newConsoleSupervisor(cfg)
 	defer func() {
 		sup.stopAll()
-		sup.closeJob()
+		sup.handle.closeHandle()
 	}()
 
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
-	// Start immediately when user clicks to open AGY
 	sup.startAll()
 
-	keyCh := startConsoleKeyReader()
+	restoreKeys, keyCh := startConsoleKeyReader()
+	defer restoreKeys()
+
 	ticker := time.NewTicker(4 * time.Second)
 	defer ticker.Stop()
 
@@ -349,13 +407,9 @@ func runWindowsConsoleUI(cfg config.GatewaySettings) {
 			case "4", "o":
 				if isGatewayHealthyLocal(cfg.Port) {
 					openGatewayAppWindow(cfg.Port)
-					sup.mu.Lock()
-					sup.lastNotice = fmt.Sprintf("Navegador aberto em http://127.0.0.1:%s", cfg.Port)
-					sup.mu.Unlock()
+					sup.setNotice(fmt.Sprintf("Navegador aberto em http://127.0.0.1:%s", cfg.Port))
 				} else {
-					sup.mu.Lock()
-					sup.lastNotice = "Gateway desligado. Pressione [1] para ligar primeiro."
-					sup.mu.Unlock()
+					sup.setNotice("Gateway desligado. Pressione [1] para ligar primeiro.")
 				}
 				renderConsoleScreen(sup)
 			case "5":
@@ -364,6 +418,25 @@ func runWindowsConsoleUI(cfg config.GatewaySettings) {
 				<-keyCh
 				renderConsoleScreen(sup)
 			case "6":
+				renderConsoleScreen(sup)
+			case "7", "a":
+				cur, _ := isSystemAutoStartEnabled()
+				target := !cur
+				if err := setSystemAutoStart(target, sup.exePath, sup.workDir, sup.cfg); err != nil {
+					sup.setNotice("Erro ao alterar Auto-Start: " + err.Error())
+				} else if target {
+					sup.setNotice("Auto-Start ATIVADO: vai iniciar sozinho ao ligar/logar no sistema.")
+				} else {
+					sup.setNotice("Auto-Start DESATIVADO: só roda quando você clicar.")
+				}
+				renderConsoleScreen(sup)
+			case "8":
+				msg, err := createAppShortcuts(sup.exePath, sup.workDir)
+				if err != nil {
+					sup.setNotice("Erro ao criar atalho: " + err.Error())
+				} else {
+					sup.setNotice(msg)
+				}
 				renderConsoleScreen(sup)
 			case "q", "\x1b":
 				fmt.Println("\nDesligando AGY e fechando terminal...")
@@ -375,39 +448,11 @@ func runWindowsConsoleUI(cfg config.GatewaySettings) {
 	}
 }
 
-func startConsoleKeyReader() <-chan byte {
-	ch := make(chan byte, 16)
-	inHandle := windows.Handle(os.Stdin.Fd())
-	var origMode uint32
-	rawEnabled := false
-	if windows.GetConsoleMode(inHandle, &origMode) == nil {
-		rawMode := origMode &^ (windows.ENABLE_LINE_INPUT | windows.ENABLE_ECHO_INPUT)
-		if windows.SetConsoleMode(inHandle, rawMode) == nil {
-			rawEnabled = true
-		}
-	}
-
-	go func() {
-		defer close(ch)
-		if rawEnabled {
-			defer func() { _ = windows.SetConsoleMode(inHandle, origMode) }()
-		}
-		buf := make([]byte, 1)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if err != nil || n == 0 {
-				return
-			}
-			ch <- buf[0]
-		}
-	}()
-	return ch
-}
-
 func renderConsoleScreen(sup *consoleSupervisor) {
 	gwUp := isGatewayHealthyLocal(sup.cfg.Port)
 	cockpitUp := isLocalPortOpen(8099)
 	ttydUp := isLocalPortOpen(7681)
+	autoOn, autoDesc := isSystemAutoStartEnabled()
 	lanIPs := detectLANIPs()
 
 	fmt.Print("\033[2J\033[H")
@@ -415,9 +460,14 @@ func renderConsoleScreen(sup *consoleSupervisor) {
 	fmt.Println("  AGY Mobile Gateway - Controle de Execução e Privacidade")
 	fmt.Println("================================================================")
 	if gwUp {
-		fmt.Println("  Status Geral : \033[32m[ RODANDO ]\033[0m  (Fechar no X desliga tudo)")
+		fmt.Println("  Status Geral : \033[32m[ RODANDO ]\033[0m  (Fechar terminal encerra tudo)")
 	} else {
 		fmt.Println("  Status Geral : \033[31m[ DESLIGADO ]\033[0m  (Privacidade ativa)")
+	}
+	if autoOn {
+		fmt.Printf("  Auto-Start   : \033[32m[ ON ]\033[0m  %s\n", autoDesc)
+	} else {
+		fmt.Println("  Auto-Start   : \033[90m[ OFF ]\033[0m Ao iniciar o sistema (use [7] para mudar)")
 	}
 	fmt.Printf("  Workspace    : %s\n", sup.workDir)
 	fmt.Println("----------------------------------------------------------------")
@@ -442,6 +492,7 @@ func renderConsoleScreen(sup *consoleSupervisor) {
 	fmt.Println("  [1] Ligar tudo            [2] Desligar tudo (Privacidade)")
 	fmt.Println("  [3] Reiniciar             [4] Abrir no Navegador")
 	fmt.Println("  [5] Ver log recente       [6] Atualizar status")
+	fmt.Println("  [7] Auto-Start no boot    [8] Criar Atalho App (Desktop/Menu)")
 	fmt.Println("  [Q] Desligar e Fechar terminal")
 	fmt.Println("================================================================")
 	if msg := sup.statusNotice(); msg != "" {
@@ -481,7 +532,10 @@ func resolveConsoleWorkDir(fallback string) string {
 	}
 	if wd, err := os.Getwd(); err == nil {
 		lower := strings.ToLower(wd)
-		if !strings.Contains(lower, `\windows\system32`) && !strings.Contains(lower, `\appdata\local\agy\bin`) {
+		isSystemDir := lower == "/" ||
+			strings.Contains(lower, `\windows\system32`) ||
+			strings.Contains(lower, `\appdata\local\agy\bin`)
+		if !isSystemDir {
 			return wd
 		}
 	}
@@ -505,12 +559,16 @@ func detectLANIPs() []string {
 		nameLower := strings.ToLower(iface.Name)
 		if strings.Contains(nameLower, "wsl") ||
 			strings.Contains(nameLower, "vethernet") ||
+			strings.Contains(nameLower, "docker") ||
+			strings.HasPrefix(nameLower, "br-") ||
+			strings.HasPrefix(nameLower, "veth") ||
 			strings.Contains(nameLower, "bluetooth") ||
 			strings.Contains(nameLower, "virtual") ||
 			strings.Contains(nameLower, "vmware") ||
 			strings.Contains(nameLower, "vbox") ||
 			strings.Contains(nameLower, "proton") ||
-			strings.Contains(nameLower, "openvpn") {
+			strings.Contains(nameLower, "openvpn") ||
+			strings.HasPrefix(nameLower, "utun") {
 			continue
 		}
 		addrs, err := iface.Addrs()

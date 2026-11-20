@@ -98,106 +98,9 @@ AGY_WORKSPACE=$WorkspaceDir
     }
 }
 
+$InstallGatewayExe = Join-Path $InstallBinDir "agy-gateway.exe"
 $DaemonScriptPath = Join-Path $InstallBinDir "start-agy-daemons.ps1"
-$DaemonScriptBody = @'
-param(
-    [switch]$OpenApp,
-    [int]$Port = __PORT__,
-    [string]$WorkspaceDir = "__WORKSPACE__"
-)
-
-$ErrorActionPreference = "SilentlyContinue"
-$BinDir = $PSScriptRoot
-$DataDir = Join-Path $env:LOCALAPPDATA "agy-gateway"
-$LogDir = Join-Path $DataDir "logs"
-$EnvFile = Join-Path $DataDir ".env"
-New-Item -ItemType Directory -Force -Path $DataDir, $LogDir | Out-Null
-
-if (Test-Path $EnvFile) {
-    Get-Content $EnvFile | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
-            $idx = $line.IndexOf("=")
-            $k = $line.Substring(0, $idx).Trim()
-            $v = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
-            if ($k) { [Environment]::SetEnvironmentVariable($k, $v, "Process") }
-        }
-    }
-}
-
-if ($env:PORT) { $Port = [int]$env:PORT }
-
-function Test-LocalPort([int]$p) {
-    try {
-        $c = New-Object System.Net.Sockets.TcpClient
-        $ar = $c.BeginConnect("127.0.0.1", $p, $null, $null)
-        $ok = $ar.AsyncWaitHandle.WaitOne(250, $false)
-        if ($ok) { $c.EndConnect($ar) }
-        $c.Close()
-        return $ok
-    } catch {
-        return $false
-    }
-}
-
-$workDir = if (Test-Path $WorkspaceDir) { $WorkspaceDir } else { $DataDir }
-
-if (-not (Test-LocalPort 7681)) {
-    $ttydCmd = Get-Command ttyd -ErrorAction SilentlyContinue
-    if ($ttydCmd) {
-        $shellExe = (Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
-        if (-not $shellExe) { $shellExe = "powershell.exe" }
-        Start-Process -FilePath $ttydCmd.Source -ArgumentList "-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "-w", $workDir, $shellExe, "-NoLogo" -WorkingDirectory $workDir -WindowStyle Hidden
-    }
-}
-
-$cockpitExe = Join-Path $BinDir "agy-cockpit.exe"
-if ((Test-Path $cockpitExe) -and -not (Test-LocalPort 8099)) {
-    Start-Process -FilePath $cockpitExe -WorkingDirectory $BinDir -WindowStyle Hidden
-}
-
-$gatewayExe = Join-Path $BinDir "agy-gateway.exe"
-if ((Test-Path $gatewayExe) -and -not (Test-LocalPort $Port)) {
-    $env:NO_SINGLE_INSTANCE_OPEN = "1"
-    $outLog = Join-Path $LogDir "gateway.log"
-    $errLog = Join-Path $LogDir "gateway.err.log"
-    Start-Process -FilePath $gatewayExe -WorkingDirectory $workDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-}
-
-if ($OpenApp) {
-    $url = "http://127.0.0.1:$Port"
-    for ($i = 0; $i -lt 25; $i++) {
-        if (Test-LocalPort $Port) { break }
-        Start-Sleep -Milliseconds 200
-    }
-    $progId = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" -ErrorAction SilentlyContinue).ProgId
-    $edgePaths = @(
-        (Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe"),
-        (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe")
-    )
-    $chromePaths = @(
-        (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
-        (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
-    )
-    $preferred = if ($progId -match "MSEdge") { $edgePaths + $chromePaths } elseif ($progId -match "Chrome") { $chromePaths + $edgePaths } else { @() }
-    $opened = $false
-    foreach ($b in $preferred) {
-        if ($b -and (Test-Path $b)) {
-            Start-Process -FilePath $b -ArgumentList "--app=$url"
-            $opened = $true
-            break
-        }
-    }
-    if (-not $opened) {
-        Start-Process $url
-    }
-}
-'@
-$DaemonScriptBody = $DaemonScriptBody.Replace("__PORT__", [string]$Port).Replace("__WORKSPACE__", $WorkspaceDir)
-Set-Content -Path $DaemonScriptPath -Value $DaemonScriptBody -Encoding UTF8
-
-$PsRunner = (Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
-if (-not $PsRunner) { $PsRunner = "powershell.exe" }
+if (Test-Path $DaemonScriptPath) { Remove-Item $DaemonScriptPath -Force -ErrorAction SilentlyContinue }
 
 $StartupVbs = Join-Path $InstallBinDir "agy-startup.vbs"
 $OpenVbs = Join-Path $InstallBinDir "agy-open.vbs"
@@ -208,60 +111,36 @@ if (Test-Path $OpenVbs) {
 $Wsh = New-Object -ComObject WScript.Shell
 $StartupShortcutLegacy = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\AGY Mobile Gateway.lnk"
 $TaskName = "AGY-Mobile-Gateway"
-$TaskCreated = $false
 
 if ($AutoStart) {
-    Set-Content -Path $StartupVbs -Value ("CreateObject(""WScript.Shell"").Run """"""$PsRunner"""" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DaemonScriptPath"""""", 0, False") -Encoding ASCII
-    if (Test-Path $StartupShortcutLegacy) {
-        Remove-Item $StartupShortcutLegacy -Force -ErrorAction SilentlyContinue
-    }
-    try {
-        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "//B //NoLogo `"$StartupVbs`"" -WorkingDirectory $InstallBinDir
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "AGY Mobile Gateway, Cockpit e Terminal Web em segundo plano" -Force | Out-Null
-        $TaskCreated = $true
-        Write-Host "    Tarefa agendada '$TaskName' registrada para iniciar no logon do Windows." -ForegroundColor Green
-    } catch {
-        $scStartup = $Wsh.CreateShortcut($StartupShortcutLegacy)
-        $scStartup.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-        $scStartup.Arguments = "//B //NoLogo `"$StartupVbs`""
-        $scStartup.WorkingDirectory = $InstallBinDir
-        if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
-            $scStartup.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
-        }
-        $scStartup.Save()
-        Write-Host "    Atalho de Startup criado em $StartupShortcutLegacy" -ForegroundColor Yellow
-    }
+    & $InstallGatewayExe --autostart on
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao ativar auto-start" }
 } else {
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    }
-    if (Test-Path $StartupShortcutLegacy) {
-        Remove-Item $StartupShortcutLegacy -Force -ErrorAction SilentlyContinue
-    }
-    if (Test-Path $StartupVbs) {
-        Remove-Item $StartupVbs -Force -ErrorAction SilentlyContinue
-    }
-    Write-Host "    Auto-start ao ligar/logar removido (o AGY so inicia quando voce clicar)." -ForegroundColor Green
+    & $InstallGatewayExe --autostart off | Out-Null
+    Write-Host "    Auto-start ao ligar/logar desativado (pode alternar no painel [7] a qualquer momento)." -ForegroundColor Green
 }
 
 $UserAppShortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AGY.lnk"
-$scUserApp = $Wsh.CreateShortcut($UserAppShortcut)
-$scUserApp.TargetPath = (Join-Path $InstallBinDir "agy-gateway.exe")
-$scUserApp.Arguments = "--console"
-$scUserApp.WorkingDirectory = $WorkspaceDir
-if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
-    $scUserApp.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
+$DesktopDir = $Wsh.SpecialFolders("Desktop")
+$DesktopShortcut = if ($DesktopDir) { Join-Path $DesktopDir "AGY.lnk" } else { "" }
+
+foreach ($lnkPath in @($UserAppShortcut, $DesktopShortcut)) {
+    if (-not $lnkPath) { continue }
+    $sc = $Wsh.CreateShortcut($lnkPath)
+    $sc.TargetPath = $InstallGatewayExe
+    $sc.Arguments = "--console"
+    $sc.WorkingDirectory = $WorkspaceDir
+    if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
+        $sc.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
+    }
+    $sc.Save()
 }
-$scUserApp.Save()
 
 $ProgramDataShortcut = "C:\ProgramData\Microsoft\Windows\Start Menu\AGY.lnk"
 if (Test-Path $ProgramDataShortcut) {
     try {
         $scPub = $Wsh.CreateShortcut($ProgramDataShortcut)
-        $scPub.TargetPath = (Join-Path $InstallBinDir "agy-gateway.exe")
+        $scPub.TargetPath = $InstallGatewayExe
         $scPub.Arguments = "--console"
         $scPub.WorkingDirectory = $WorkspaceDir
         if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
@@ -275,26 +154,8 @@ if (Test-Path $ProgramDataShortcut) {
 }
 
 if ($Start) {
-    Write-Host "==> [4/4] Iniciando servicos ocultos e validando APIs..." -ForegroundColor Cyan
-    if ($TaskCreated) {
-        Start-ScheduledTask -TaskName $TaskName
-    } else {
-        & $DaemonScriptPath
-    }
-    $ready = $false
-    for ($i = 0; $i -lt 30; $i++) {
-        try {
-            $health = Invoke-RestMethod "http://127.0.0.1:$Port/api/health"
-            if ($health.ok) { $ready = $true; break }
-        } catch {
-            Start-Sleep -Milliseconds 300
-        }
-    }
-    if (-not $ready) { throw "Gateway nao respondeu em http://127.0.0.1:$Port/api/health" }
-    $feats = Invoke-RestMethod "http://127.0.0.1:$Port/api/features"
-    $slashes = Invoke-RestMethod "http://127.0.0.1:$Port/api/slash-commands"
-    Write-Host ("    Health: " + ($health | ConvertTo-Json -Compress)) -ForegroundColor Green
-    Write-Host ("    Terminal=$($feats.features.terminal) Telemetry=$($feats.features.telemetry) Cockpit=$($feats.features.cockpit) SlashCommands=$($slashes.commands.Count)") -ForegroundColor Green
+    Write-Host "==> [4/4] Abrindo painel interativo do AGY..." -ForegroundColor Cyan
+    Start-Process -FilePath $InstallGatewayExe -ArgumentList "--console" -WorkingDirectory $WorkspaceDir
 }
 
-Write-Host "==> Instalacao Windows concluida! Clique no atalho AGY para abrir o painel no terminal." -ForegroundColor Green
+Write-Host "==> Instalacao Windows concluida! Use o atalho AGY (Menu Iniciar ou Area de Trabalho) para controlar e ativar Auto-Start se quiser." -ForegroundColor Green

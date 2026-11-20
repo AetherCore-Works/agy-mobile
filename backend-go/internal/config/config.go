@@ -155,7 +155,28 @@ func GetAppDirs() AppDirs {
 	}
 }
 
-// Load reads .env (local, parent, executable directory, or user DataDir) and returns normalized GatewaySettings.
+// DefaultConfigDir returns the OS-standard directory for persistent gateway configuration (.env).
+func DefaultConfigDir() string {
+	if fileExists("/.dockerenv") {
+		return "/data"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	switch runtime.GOOS {
+	case "windows":
+		localApp := envOr("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+		return filepath.Join(localApp, "agy-gateway")
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "agy-gateway")
+	default:
+		xdgConfig := envOr("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+		return filepath.Join(xdgConfig, "agy-gateway")
+	}
+}
+
+// Load reads .env (local, parent, executable directory, config dir, or DataDir) and returns normalized GatewaySettings.
 func Load() GatewaySettings {
 	loadDotEnv(".env")
 	loadDotEnv("../.env")
@@ -166,6 +187,7 @@ func Load() GatewaySettings {
 				loadDotEnv(filepath.Join(exeDir, ".env"))
 			}
 		}
+		loadDotEnv(filepath.Join(DefaultConfigDir(), ".env"))
 		loadDotEnv(filepath.Join(GetAppDirs().DataDir, ".env"))
 	} else {
 		loadDotEnv(filepath.Join(GetAppDirs().DataDir, ".env"))
