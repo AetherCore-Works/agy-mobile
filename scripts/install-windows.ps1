@@ -1,6 +1,6 @@
 param(
     [switch]$SkipBuild,
-    [switch]$NoStart,
+    [switch]$Start,
     [switch]$AutoStart,
     [int]$Port = 8088,
     [string]$WorkspaceDir = ""
@@ -88,8 +88,14 @@ COCKPIT_URL=http://127.0.0.1:8099
 COCKPIT_ALLOW_POWER=true
 TTYD_WS_URL=ws://127.0.0.1:7681/terminal/ws
 AGY_BIN=$ResolvedAgyBin
+AGY_WORKSPACE=$WorkspaceDir
 "@
     Set-Content -Path $EnvFile -Value $defaultEnv -Encoding UTF8
+} else {
+    $curEnv = Get-Content $EnvFile -Raw -ErrorAction SilentlyContinue
+    if ($curEnv -and -not ($curEnv -match "(?m)^AGY_WORKSPACE=")) {
+        Add-Content -Path $EnvFile -Value "`nAGY_WORKSPACE=$WorkspaceDir" -Encoding UTF8
+    }
 }
 
 $DaemonScriptPath = Join-Path $InstallBinDir "start-agy-daemons.ps1"
@@ -195,7 +201,9 @@ if (-not $PsRunner) { $PsRunner = "powershell.exe" }
 
 $StartupVbs = Join-Path $InstallBinDir "agy-startup.vbs"
 $OpenVbs = Join-Path $InstallBinDir "agy-open.vbs"
-Set-Content -Path $OpenVbs -Value ("CreateObject(""WScript.Shell"").Run """"""$PsRunner"""" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DaemonScriptPath"""" -OpenApp"", 0, False") -Encoding ASCII
+if (Test-Path $OpenVbs) {
+    Remove-Item $OpenVbs -Force -ErrorAction SilentlyContinue
+}
 
 $Wsh = New-Object -ComObject WScript.Shell
 $StartupShortcutLegacy = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\AGY Mobile Gateway.lnk"
@@ -241,9 +249,9 @@ if ($AutoStart) {
 
 $UserAppShortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AGY.lnk"
 $scUserApp = $Wsh.CreateShortcut($UserAppShortcut)
-$scUserApp.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-$scUserApp.Arguments = "//B //NoLogo `"$OpenVbs`""
-$scUserApp.WorkingDirectory = $InstallBinDir
+$scUserApp.TargetPath = (Join-Path $InstallBinDir "agy-gateway.exe")
+$scUserApp.Arguments = "--console"
+$scUserApp.WorkingDirectory = $WorkspaceDir
 if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
     $scUserApp.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
 }
@@ -253,20 +261,20 @@ $ProgramDataShortcut = "C:\ProgramData\Microsoft\Windows\Start Menu\AGY.lnk"
 if (Test-Path $ProgramDataShortcut) {
     try {
         $scPub = $Wsh.CreateShortcut($ProgramDataShortcut)
-        $scPub.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-        $scPub.Arguments = "//B //NoLogo `"$OpenVbs`""
-        $scPub.WorkingDirectory = $InstallBinDir
+        $scPub.TargetPath = (Join-Path $InstallBinDir "agy-gateway.exe")
+        $scPub.Arguments = "--console"
+        $scPub.WorkingDirectory = $WorkspaceDir
         if (Test-Path (Join-Path $InstallBinDir "agy-gateway.ico")) {
             $scPub.IconLocation = (Join-Path $InstallBinDir "agy-gateway.ico")
         }
         $scPub.Save()
-        Write-Host "    Atalho $ProgramDataShortcut atualizado para abrir o PWA sem terminal." -ForegroundColor Green
+        Write-Host "    Atalho $ProgramDataShortcut atualizado para abrir o painel interativo." -ForegroundColor Green
     } catch {
-        Write-Host "    Aviso: sem permissao de Admin para editar $ProgramDataShortcut (mas o .exe alvo foi atualizado e abre o app automaticamente)." -ForegroundColor Yellow
+        Write-Host "    Aviso: sem permissao de Admin para editar $ProgramDataShortcut (o .exe alvo ja abre o painel interativo diretamente)." -ForegroundColor Yellow
     }
 }
 
-if (-not $NoStart) {
+if ($Start) {
     Write-Host "==> [4/4] Iniciando servicos ocultos e validando APIs..." -ForegroundColor Cyan
     if ($TaskCreated) {
         Start-ScheduledTask -TaskName $TaskName
@@ -289,4 +297,4 @@ if (-not $NoStart) {
     Write-Host ("    Terminal=$($feats.features.terminal) Telemetry=$($feats.features.telemetry) Cockpit=$($feats.features.cockpit) SlashCommands=$($slashes.commands.Count)") -ForegroundColor Green
 }
 
-Write-Host "==> Instalacao Windows concluida! Clique no atalho AGY para abrir (http://127.0.0.1:$Port)." -ForegroundColor Green
+Write-Host "==> Instalacao Windows concluida! Clique no atalho AGY para abrir o painel no terminal." -ForegroundColor Green

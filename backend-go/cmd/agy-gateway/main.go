@@ -1259,10 +1259,14 @@ func openGatewayAppWindow(port string) {
 }
 
 func main() {
+	if maybeRunConsoleController() {
+		return
+	}
+
 	cfg := config.Load()
 
 	shouldOpenBrowser := slices.Contains(os.Args[1:], "--open")
-	if runtime.GOOS == "windows" && cfg.TLSCertFile == "" && strings.TrimSpace(os.Getenv("NO_SINGLE_INSTANCE_OPEN")) == "" {
+	if runtime.GOOS == "windows" && !slices.Contains(os.Args[1:], "--daemon") && cfg.TLSCertFile == "" && strings.TrimSpace(os.Getenv("NO_SINGLE_INSTANCE_OPEN")) == "" {
 		if isGatewayHealthyLocal(cfg.Port) {
 			log.Printf("AGY Mobile Gateway already running on http://127.0.0.1:%s; opening UI...", cfg.Port)
 			openGatewayAppWindow(cfg.Port)
