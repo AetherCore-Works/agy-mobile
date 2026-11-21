@@ -35,7 +35,8 @@ async function run() {
       if (res.status() >= 500) serverErrors.push(`iOS ${res.status()} ${res.url()}`);
     });
 
-    await iosPage.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await iosPage.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await iosPage.locator('textarea').first().waitFor({ state: 'visible' });
     await assertNoHorizontalOverflow(iosPage, 'iOS initial');
 
     // Verify iOS PWA apple-touch-icon points to PNG (iOS Safari ignores SVG) and loads 200
@@ -83,7 +84,8 @@ async function run() {
       if (res.status() >= 500) serverErrors.push(`Desktop ${res.status()} ${res.url()}`);
     });
 
-    await desktopPage.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await desktopPage.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await desktopPage.locator('textarea').first().waitFor({ state: 'visible' });
     await assertNoHorizontalOverflow(desktopPage, 'Desktop initial');
 
     // Toggle Split View

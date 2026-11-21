@@ -84,4 +84,11 @@ func TestLocalRunnerBrainScan(t *testing.T) {
 	if err != nil || deletedAgain {
 		t.Fatalf("expected deletedAgain=false err=nil, got deleted=%v err=%v", deletedAgain, err)
 	}
+
+	if got := cleanHostName("CachyCore.lan\r\n"); got != "CachyCore" {
+		t.Fatalf("expected CachyCore, got %q", got)
+	}
+	if got := r.HostName(context.Background()); got == "" {
+		t.Fatal("expected non-empty LocalRunner.HostName")
+	}
 }

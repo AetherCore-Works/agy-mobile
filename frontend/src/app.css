@@ -242,6 +242,14 @@
 }
 
 @layer base {
+  :root {
+    --safe-bottom-dynamic: env(safe-area-inset-bottom, 0px);
+  }
+
+  :root[data-kb-open="true"] {
+    --safe-bottom-dynamic: 0px;
+  }
+
   html {
     width: 100%;
     height: 100%;

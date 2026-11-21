@@ -1415,7 +1415,7 @@
   <div
     class="w-full px-2.5 {isSplitView
       ? 'sm:px-3 pb-2.5'
-      : 'sm:px-6 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-4'} pt-1 shrink-0"
+      : 'sm:px-6 pb-[max(0.25rem,var(--safe-bottom-dynamic))] sm:pb-4'} pt-1 shrink-0"
   >
     <div
       class="{isSplitView
@@ -1566,7 +1566,7 @@
             </div>
           {/if}
 
-          <div class="p-2 sm:p-2.5 space-y-2">
+          <div class="px-2 py-1.5 sm:p-2.5 space-y-1.5 sm:space-y-2">
             <!-- Compact Model, Permission & Quick Actions Bar -->
             <div class="flex flex-wrap items-center justify-between gap-1.5">
               <div
@@ -1623,6 +1623,7 @@
                   bind:this={fileInputEl}
                   type="file"
                   multiple
+                  tabindex={-1}
                   onchange={handleFilesSelected}
                   class="hidden"
                 />

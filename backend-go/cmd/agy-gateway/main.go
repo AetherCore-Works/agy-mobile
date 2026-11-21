@@ -236,8 +236,9 @@ func buildAppMux(
 
 	mux.HandleFunc("GET /api/features", func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"version": appVersion,
-			"mode":    cfg.Mode,
+			"version":   appVersion,
+			"mode":      cfg.Mode,
+			"host_name": r.HostName(req.Context()),
 			"dirs": map[string]string{
 				"inbox":  cfg.Dirs.InboxDir,
 				"outbox": cfg.Dirs.OutboxDir,
@@ -253,11 +254,13 @@ func buildAppMux(
 		}
 		online := r.CheckOnline(req.Context(), 1500*time.Millisecond)
 		activeOS := r.ActiveOS(req.Context())
+		hostName := r.HostName(req.Context())
 		unreadAlerts, _ := store.CountUnreadAlerts()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"online":        online,
 			"mode":          cfg.Mode,
 			"active_os":     activeOS,
+			"host_name":     hostName,
 			"target_host":   cfg.TargetHost,
 			"wol_mac":       wolMAC,
 			"target_user":   cfg.TargetUser,

@@ -120,13 +120,16 @@
   });
   let defaultModel = $state("gemini-4-hydrogen-high");
   let defaultPermission = $state<PermissionMode>("copilot");
+  let targetHostName = $state("");
 
   let hostLabel = $derived(
-    gatewayMode === "standalone"
-      ? "AGY Local"
-      : gatewayMode === "ide-bridge"
-        ? "IDE Bridge"
-        : "Remote Host",
+    targetHostName
+      ? targetHostName
+      : gatewayMode === "standalone"
+        ? "AGY Local"
+        : gatewayMode === "ide-bridge"
+          ? "IDE Bridge"
+          : "Remote Host",
   );
 
   // Tabs & Desktop Split View State
@@ -388,6 +391,7 @@
         unreadAlerts = st.unread_alerts;
       }
       if (st.active_os) activeOS = st.active_os;
+      if (st.host_name) targetHostName = st.host_name;
     } catch {
       targetOnline = false;
     }
@@ -509,7 +513,9 @@
     const syncViewport = () => {
       if (!shellEl) return;
       const vv = window.visualViewport;
-      if (vv && vv.height < window.innerHeight - 80) {
+      const isKbOpen = Boolean(vv && vv.height < window.innerHeight - 80);
+      document.documentElement.dataset.kbOpen = isKbOpen ? "true" : "false";
+      if (vv && isKbOpen) {
         shellEl.style.bottom = 'auto';
         shellEl.style.height = `${vv.height}px`;
         shellEl.style.top = `${vv.offsetTop}px`;
@@ -561,6 +567,9 @@
         }
         if (loadedFeatures.dirs?.outbox) {
           outboxDir = loadedFeatures.dirs.outbox;
+        }
+        if (loadedFeatures.host_name) {
+          targetHostName = loadedFeatures.host_name;
         }
       }
 
@@ -1058,9 +1067,8 @@
 
 <TerminalModal
   bind:open={terminalOpen}
-  hostLabel={gatewayMode === "standalone"
-    ? "Terminal Local"
-    : "Remote Terminal"}
+  hostLabel={targetHostName ||
+    (gatewayMode === "standalone" ? "Terminal Local" : "Remote Terminal")}
 />
 <OutboxModal bind:open={outboxOpen} bind:files={outboxFiles} {outboxDir} />
 <OutboxPreviewModal bind:target={mediaPreviewTarget} />

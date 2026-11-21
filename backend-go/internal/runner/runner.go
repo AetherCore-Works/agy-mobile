@@ -101,6 +101,7 @@ type TelemetryData struct {
 type Runner interface {
 	CheckOnline(ctx context.Context, timeout time.Duration) bool
 	ActiveOS(ctx context.Context) string
+	HostName(ctx context.Context) string
 	StartAGYProcess(ctx context.Context, args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error)
 	OpenOllamaChat(ctx context.Context, payload []byte) (io.ReadCloser, func() error, error)
 	ListAGYModels(ctx context.Context) []ModelInfo
@@ -183,6 +184,32 @@ func (r *LocalRunner) CheckOnline(_ context.Context, _ time.Duration) bool {
 
 func (r *LocalRunner) ActiveOS(_ context.Context) string {
 	return runtime.GOOS
+}
+
+func cleanHostName(raw string) string {
+	line := strings.TrimSpace(strings.Split(strings.ReplaceAll(raw, "\r", "\n"), "\n")[0])
+	if line == "" {
+		return ""
+	}
+	for _, suffix := range []string{".local", ".lan", ".home", ".internal"} {
+		if strings.HasSuffix(strings.ToLower(line), suffix) && len(line) > len(suffix) {
+			line = line[:len(line)-len(suffix)]
+			break
+		}
+	}
+	return strings.TrimSpace(line)
+}
+
+func (r *LocalRunner) HostName(_ context.Context) string {
+	if envName := cleanHostName(os.Getenv("HOST_NAME")); envName != "" {
+		return envName
+	}
+	if h, err := os.Hostname(); err == nil {
+		if clean := cleanHostName(h); clean != "" {
+			return clean
+		}
+	}
+	return ""
 }
 
 func (r *LocalRunner) StartAGYProcess(ctx context.Context, args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
@@ -558,11 +585,13 @@ func backupDirTarGz(brainDir, convID, targetDir string) error {
 type SSHRunner struct {
 	cfg config.GatewaySettings
 
-	targetMu       sync.RWMutex
-	cachedOS       string
-	cachedAt       time.Time
-	cachedOnline   bool
-	cachedOnlineAt time.Time
+	targetMu         sync.RWMutex
+	cachedOS         string
+	cachedAt         time.Time
+	cachedOnline     bool
+	cachedOnlineAt   time.Time
+	cachedHostName   string
+	cachedHostNameAt time.Time
 }
 
 type sshTarget struct {
@@ -686,6 +715,67 @@ func (r *SSHRunner) resolveTarget(ctx context.Context) sshTarget {
 
 func (r *SSHRunner) ActiveOS(ctx context.Context) string {
 	return r.resolveTarget(ctx).osName
+}
+
+func (r *SSHRunner) hostNameCacheFile() string {
+	if r.cfg.Dirs.CacheDir == "" {
+		return ""
+	}
+	return filepath.Join(r.cfg.Dirs.CacheDir, "target_hostname")
+}
+
+func (r *SSHRunner) HostName(ctx context.Context) string {
+	if envName := cleanHostName(os.Getenv("HOST_NAME")); envName != "" {
+		return envName
+	}
+
+	r.targetMu.RLock()
+	cached := r.cachedHostName
+	fresh := !r.cachedHostNameAt.IsZero() && time.Since(r.cachedHostNameAt) < 5*time.Minute
+	r.targetMu.RUnlock()
+
+	if fresh && cached != "" {
+		return cached
+	}
+
+	if cached == "" {
+		if cf := r.hostNameCacheFile(); cf != "" {
+			if b, err := os.ReadFile(cf); err == nil {
+				if persisted := cleanHostName(string(b)); persisted != "" {
+					r.targetMu.Lock()
+					if r.cachedHostName == "" {
+						r.cachedHostName = persisted
+					}
+					cached = r.cachedHostName
+					r.targetMu.Unlock()
+				}
+			}
+		}
+	}
+
+	if !r.CheckOnline(ctx, 1200*time.Millisecond) {
+		return cached
+	}
+
+	out, err := r.runSSH(ctx, "hostname", 2*time.Second)
+	if err != nil {
+		return cached
+	}
+	detected := cleanHostName(out)
+	if detected == "" {
+		return cached
+	}
+
+	r.targetMu.Lock()
+	r.cachedHostName = detected
+	r.cachedHostNameAt = time.Now()
+	r.targetMu.Unlock()
+
+	if cf := r.hostNameCacheFile(); cf != "" {
+		_ = os.MkdirAll(filepath.Dir(cf), 0o755)
+		_ = os.WriteFile(cf, []byte(detected+"\n"), 0o644)
+	}
+	return detected
 }
 
 func (r *SSHRunner) sshBaseArgs(connectTimeoutSec int) []string {

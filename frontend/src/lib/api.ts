@@ -76,7 +76,7 @@ export interface WatchdogState {
   downtime_events: number;
 }
 
-export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
+export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; host_name?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
   const res = await fetch('/api/status');
   return res.json();
 }
@@ -101,6 +101,7 @@ export async function fetchTelemetry(): Promise<TelemetryData> {
 export async function fetchFeatures(): Promise<{
   version: string;
   mode?: string;
+  host_name?: string;
   dirs?: { inbox: string; outbox: string };
   features: Record<string, any>;
 }> {
