@@ -133,7 +133,7 @@ func (m *Manager) RouteAutoModel(ctx context.Context, prompt string, attached []
 		for _, lm := range localModels {
 			ids[lm.ID] = true
 		}
-		for _, pref := range []string{"ollama:qwen3:8b", "ollama:qwen3:8b", "ollama:qwen3:14b"} {
+		for _, pref := range []string{"ollama:qwen3:8b", "ollama:llama3.2:latest", "ollama:qwen3:14b"} {
 			if ids[pref] {
 				return pref
 			}
@@ -145,17 +145,17 @@ func (m *Manager) RouteAutoModel(ctx context.Context, prompt string, attached []
 	return "gemini-4-hydrogen-high"
 }
 
-// buildAgentPrompt injects mobile Inbox/Outbox context into non-slash prompts without polluting stored user history.
+// buildAgentPrompt appends mobile Inbox/Outbox context to non-slash prompts so the user's prompt stays first for CLI title/preview extraction.
 func (m *Manager) buildAgentPrompt(userPrompt string, attachedFiles []string) string {
 	trimmed := strings.TrimSpace(userPrompt)
 	if strings.HasPrefix(trimmed, "/") && len(attachedFiles) == 0 {
 		return trimmed
 	}
 
-	var prefix strings.Builder
+	var suffix strings.Builder
 	if len(attachedFiles) > 0 {
 		fmt.Fprintf(
-			&prefix,
+			&suffix,
 			"[Arquivos anexados pelo usuário em %s: %s. Inspecione-os usando read_file conforme necessário.]\n",
 			m.cfg.Dirs.InboxDir,
 			strings.Join(attachedFiles, ", "),
@@ -163,16 +163,20 @@ func (m *Manager) buildAgentPrompt(userPrompt string, attachedFiles []string) st
 	}
 	if m.cfg.Dirs.OutboxDir != "" {
 		fmt.Fprintf(
-			&prefix,
+			&suffix,
 			"[Contexto AGY Mobile Outbox: Diretório para download no celular: %s. Sempre que o usuário pedir para baixar, exportar, enviar para o outbox ou disponibilizar qualquer arquivo/relatório/zip/script para o celular, salve ou copie o arquivo final obrigatoriamente dentro de %s e cite o nome exato do arquivo na resposta.]\n",
 			m.cfg.Dirs.OutboxDir,
 			m.cfg.Dirs.OutboxDir,
 		)
 	}
-	if prefix.Len() == 0 {
+	ctxBlock := strings.TrimSpace(suffix.String())
+	if ctxBlock == "" {
 		return trimmed
 	}
-	return prefix.String() + "\n" + trimmed
+	if trimmed == "" {
+		return ctxBlock
+	}
+	return trimmed + "\n\n" + ctxBlock
 }
 
 func (m *Manager) snapshotOutbox(ctx context.Context) map[string]float64 {
@@ -713,10 +717,10 @@ func formatUsageTable(cmdData map[string]any) string {
 
 func formatToolsSummary(tools []string) string {
 	if len(tools) == 0 {
-		return "*Instrução concluída com sucesso no Remote Host.*"
+		return "*Instrução concluída com sucesso no host.*"
 	}
 	var b strings.Builder
-	b.WriteString("*Instruções executadas no Remote Host com sucesso.*\n\n**Ações executadas:**\n")
+	b.WriteString("*Instruções executadas no host com sucesso.*\n\n**Ações executadas:**\n")
 	for _, t := range tools {
 		b.WriteString("- `" + t + "`\n")
 	}

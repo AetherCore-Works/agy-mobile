@@ -413,7 +413,7 @@
               <div class="relative flex-1">
                 <Input
                   bind:value={filterText}
-                  placeholder="Filtrar comandos (/publish, fin, review)..."
+                  placeholder="Filtrar comandos (/publish, status, review)..."
                   class="text-xs pl-8"
                 />
                 <Icon

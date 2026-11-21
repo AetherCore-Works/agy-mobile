@@ -4,6 +4,6 @@
    - É proibido usar emojis Unicode (`🚀`, `🔒`, `✅`, `⚠️`, `🖥️`, `☁️`, etc.) em botões, títulos, badges, status, drawers ou mensagens de erro da interface web.
    - Use **ícones SVG vetoriais** com traço uniforme (`stroke="currentColor"`, `fill="none"`, `viewBox="0 0 24 24"`, `stroke-width="1.85"`, `stroke-linecap="round"`, `stroke-linejoin="round"`).
 
-2. **Padrão Baseado no Hegemonia:**
-   - Na migração para Svelte 5 (Fase 3), adotar exatamente o padrão de `/home/user/code/games/hegemonia/apps/web/src/components/Icon.svelte` + `src/lib/icons.ts` (componente `<Icon name="..." size={18} />` sem dependências pesadas).
+2. **Padrão de Componente de Ícone:**
+   - Em Svelte 5, adotar o componente `<Icon name="..." size={18} />` + `src/lib/icons.ts` sem dependências pesadas.
    - Enquanto o frontend estiver em HTML único (Fases 1–2), utilizar SVGs inline seguindo exatamente o mesmo padrão visual (`24x24`, `stroke-width="1.85"`, `currentColor`).

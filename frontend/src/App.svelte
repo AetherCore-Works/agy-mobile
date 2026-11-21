@@ -156,15 +156,27 @@
   );
   let anyGenerating = $derived(tabs.some((t) => t.isGenerating));
 
+  function clearTabStorage(storageKeyPrefix: string) {
+    try {
+      localStorage.removeItem(`${storageKeyPrefix}conv_id`);
+      localStorage.removeItem(`${storageKeyPrefix}active_job_id`);
+      localStorage.removeItem(`${storageKeyPrefix}active_job_seq`);
+    } catch {
+      // ignore storage errors
+    }
+  }
+
   function createTab(activate = true): TabEntry {
     if (tabs.length >= 6) {
       return tabs[tabs.length - 1];
     }
     tabCounter += 1;
     const newId = `tab-${tabCounter}`;
+    const storageKeyPrefix = `agy_${newId}_`;
+    clearTabStorage(storageKeyPrefix);
     const entry: TabEntry = {
       id: newId,
-      storageKeyPrefix: `agy_${newId}_`,
+      storageKeyPrefix,
       title: "",
       convId: null,
       isGenerating: false,
@@ -212,6 +224,10 @@
   function closeTab(e: MouseEvent, tabId: string) {
     e.stopPropagation();
     if (tabs.length <= 1) return;
+    const closed = tabs.find((t) => t.id === tabId);
+    if (closed && closed.storageKeyPrefix !== "agy_") {
+      clearTabStorage(closed.storageKeyPrefix);
+    }
     const remaining = tabs.filter((t) => t.id !== tabId);
     tabs = remaining;
     if (leftTabId === tabId) {

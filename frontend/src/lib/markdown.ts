@@ -34,8 +34,48 @@ mdRenderer.code = ({ text, lang }: { text: string; lang?: string }) => {
   return `<div class="code-block"><div class="code-block-header"><span class="code-lang">${label}</span><button type="button" class="code-copy-btn" data-copy-code title="Copiar código">${COPY_ICON_SVG}<span>Copiar</span></button></div><pre><code class="language-${escapeHtml(lang || '')}">${highlighted}</code></pre></div>`;
 };
 
+const INLINE_LATEX_SYMBOLS: Record<string, string> = {
+  '\\rightarrow': '→',
+  '\\to': '→',
+  '\\leftarrow': '←',
+  '\\leftrightarrow': '↔',
+  '\\Rightarrow': '⇒',
+  '\\Leftarrow': '⇐',
+  '\\Leftrightarrow': '⇔',
+  '\\uparrow': '↑',
+  '\\downarrow': '↓',
+  '\\times': '×',
+  '\\approx': '≈',
+  '\\neq': '≠',
+  '\\le': '≤',
+  '\\leq': '≤',
+  '\\ge': '≥',
+  '\\geq': '≥',
+  '\\pm': '±',
+  '\\cdot': '·',
+  '\\infty': '∞',
+  '\\checkmark': '✓',
+  '\\bullet': '•',
+};
+
+/**
+ * Replaces standalone inline LaTeX symbol tokens (e.g. $\rightarrow$ -> →)
+ * outside fenced code blocks and inline code spans.
+ */
+function normalizeInlineLatexSymbols(text: string): string {
+  return text
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/g)
+    .map((segment, idx) =>
+      idx % 2 === 1
+        ? segment
+        : segment.replace(/\$\s*(\\[a-zA-Z]+)\s*\$/g, (full, cmd) => INLINE_LATEX_SYMBOLS[cmd] ?? full),
+    )
+    .join('');
+}
+
 export function renderMarkdown(text: string): string {
-  return marked.parse(text || '', { async: false, renderer: mdRenderer }) as string;
+  const normalized = normalizeInlineLatexSymbols(text || '');
+  return marked.parse(normalized, { async: false, renderer: mdRenderer }) as string;
 }
 
 export async function copyTextSafe(text: string): Promise<boolean> {

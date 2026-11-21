@@ -161,7 +161,7 @@
     <div class="bg-zinc-900 px-4 py-2 border-b border-zinc-800 flex items-center justify-between shrink-0">
       <div class="flex items-center space-x-2">
         <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
-        <span class="text-xs font-mono font-bold text-zinc-200">Terminal Remote Terminal (Sudo / HITL)</span>
+        <span class="text-xs font-mono font-bold text-zinc-200">Remote Terminal (Sudo / HITL)</span>
       </div>
       <div class="flex items-center space-x-1.5">
         <button onclick="reloadTerminal()" title="Recarregar Sessão" class="p-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs">
@@ -210,7 +210,7 @@
     <div class="p-4 border-b border-zinc-800 flex items-center justify-between">
       <div class="flex items-center space-x-2">
         <svg class="w-5 h-5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        <h2 class="text-sm font-bold text-zinc-100">Sessões do Remote Host</h2>
+        <h2 class="text-sm font-bold text-zinc-100">Sessões do Host</h2>
       </div>
       <div class="flex items-center space-x-1">
         <button onclick="loadConversations()" title="Sincronizar Agora" class="p-1 rounded-lg text-zinc-400 hover:text-brand-400 transition-colors">
@@ -244,7 +244,7 @@
     <div id="empty-state" class="flex flex-col items-center justify-center h-full text-center px-4 py-8 text-zinc-500 select-none">
       <img src="/static/icon.svg" class="w-16 h-16 rounded-2xl mb-3 shadow-lg" alt="Logo">
       <p class="text-sm font-semibold text-zinc-200">Antigravity Mobile Gateway</p>
-      <p class="text-xs text-zinc-400 mt-1 max-w-xs">Controle total do Remote Host via WireGuard. Suporta modelos em nuvem, Ollama local e terminal HITL integrado.</p>
+      <p class="text-xs text-zinc-400 mt-1 max-w-xs">Controle total do host remoto via VPN. Suporta modelos em nuvem, Ollama local e terminal HITL integrado.</p>
     </div>
   </main>
 
@@ -264,7 +264,7 @@
       <option value="copilot">Modo: Copiloto</option>
       <option value="autonomous">Modo: Autônomo</option>
     </select>
-    <button onclick="sendQuick('Qual o status atual do host Remote Host, recursos e uptime?')" class="inline-flex items-center gap-1.5 text-[11px] whitespace-nowrap bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-2.5 py-1 rounded-full active:scale-95 transition-all shrink-0">
+    <button onclick="sendQuick('Qual o status atual do host, recursos e uptime?')" class="inline-flex items-center gap-1.5 text-[11px] whitespace-nowrap bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 px-2.5 py-1 rounded-full active:scale-95 transition-all shrink-0">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <span>Status Host</span>
     </button>
@@ -725,7 +725,7 @@
       if (activeAgentBubble) {
         activeAgentBubble.classList.remove('typing-cursor');
         if (!activeAccumulatedText || !activeAccumulatedText.trim()) {
-          activeAccumulatedText = '*Instrução processada com sucesso no Remote Host.*';
+          activeAccumulatedText = '*Instrução processada com sucesso no host.*';
         }
         activeAgentBubble.innerHTML = marked.parse(activeAccumulatedText);
         enhanceCodeBlocks(activeAgentBubble);
@@ -839,9 +839,9 @@
                   } else {
                     const tools = (event.executed_tools && event.executed_tools.length) ? event.executed_tools : currentJobTools;
                     if (tools.length > 0) {
-                      activeAccumulatedText = '*Instruções executadas no Remote Host com sucesso.*\n\n**Ações executadas:**\n' + tools.map(t => `- \`${t}\``).join('\n');
+                      activeAccumulatedText = '*Instruções executadas no host com sucesso.*\n\n**Ações executadas:**\n' + tools.map(t => `- \`${t}\``).join('\n');
                     } else {
-                      activeAccumulatedText = '*Instrução concluída com sucesso no Remote Host.*';
+                      activeAccumulatedText = '*Instrução concluída com sucesso no host.*';
                     }
                   }
                 }

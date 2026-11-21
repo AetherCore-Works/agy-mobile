@@ -141,7 +141,7 @@ func TestInboxUploadOutboxAndWoLPacket(t *testing.T) {
 	if wolRec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 when WoL disabled, got %d", wolRec.Code)
 	}
-	pkt, err := wol.BuildMagicPacket("00:00:00:00:00:00")
+	pkt, err := wol.BuildMagicPacket("00:11:22:33:44:55")
 	if err != nil || len(pkt) != 102 {
 		t.Fatalf("unexpected magic packet len=%d err=%v", len(pkt), err)
 	}

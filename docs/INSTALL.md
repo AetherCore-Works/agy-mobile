@@ -11,14 +11,14 @@ Modos de operação suportados (`GATEWAY_MODE`):
 
 ## 0. Download Direto (Binários Prontos — Recomendado)
 
-Baixe o executável pronto na página oficial de **[GitHub Releases (`v3.3.0`)](https://github.com/Phoenix7290/agy-mobile-gateway/releases/latest)**:
+Baixe o executável pronto na página oficial de **[GitHub Releases (`v3.3.0`)](https://github.com/AetherCore-Works/agy-mobile/releases/latest)**:
 
 | Sistema Operacional | Arquivo na Release |
 | :--- | :--- |
-| **Windows (64-bit x86_64)** | [`agy-gateway-windows-amd64.exe`](https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-windows-amd64.exe) |
-| **Linux (PC x86_64)** | [`agy-gateway-linux-amd64`](https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-linux-amd64) |
-| **Linux (ARM64 / Raspberry Pi)** | [`agy-gateway-linux-arm64`](https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-linux-arm64) |
-| **macOS (Apple Silicon M1/M2/M3/M4)** | [`agy-gateway-darwin-arm64`](https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-darwin-arm64) |
+| **Windows (64-bit x86_64)** | [`agy-gateway-windows-amd64.exe`](https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-windows-amd64.exe) |
+| **Linux (PC x86_64)** | [`agy-gateway-linux-amd64`](https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-linux-amd64) |
+| **Linux (ARM64 / Raspberry Pi)** | [`agy-gateway-linux-arm64`](https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-linux-arm64) |
+| **macOS (Apple Silicon M1/M2/M3/M4)** | [`agy-gateway-darwin-arm64`](https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-darwin-arm64) |
 
 ---
 
@@ -26,7 +26,7 @@ Baixe o executável pronto na página oficial de **[GitHub Releases (`v3.3.0`)](
 
 ### Opção A: Executável Nativo (`agy-gateway-windows-amd64.exe`)
 1. Certifique-se de que o **`agy` CLI** esteja instalado e autenticado na máquina.
-2. Baixe [`agy-gateway-windows-amd64.exe`](https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-windows-amd64.exe).
+2. Baixe [`agy-gateway-windows-amd64.exe`](https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-windows-amd64.exe).
 3. No PowerShell, dentro da pasta do seu projeto/workspace:
 ```powershell
 $env:GATEWAY_MODE = "standalone"
@@ -52,7 +52,7 @@ $env:GATEWAY_MODE = "standalone"
 ### Usando o binário pronto
 ```bash
 # Exemplo Linux x86_64 (ajuste a URL se for linux-arm64 ou darwin-arm64)
-curl -L -o agy-gateway https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-linux-amd64
+curl -L -o agy-gateway https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-linux-amd64
 chmod +x agy-gateway
 
 GATEWAY_MODE=standalone ./agy-gateway
@@ -60,7 +60,7 @@ GATEWAY_MODE=standalone ./agy-gateway
 
 ### Ou compilando a partir do código-fonte (requer Go 1.26+)
 ```bash
-git clone https://github.com/Phoenix7290/agy-mobile-gateway.git
+git clone https://github.com/AetherCore-Works/agy-mobile.git
 cd agy-mobile-gateway/backend-go
 
 go build -ldflags="-s -w" -o agy-gateway ./cmd/agy-gateway
@@ -90,7 +90,7 @@ Se um colega usa **apenas a interface gráfica da IDE Antigravity no Windows** e
 ### Caminho 1 (Recomendado e pronto hoje): Baixar o `.exe` + ter o `agy` CLI no mesmo Windows da IDE
 Mesmo que o colega nunca digite comandos no terminal para trabalhar no dia a dia:
 1. Instale o **`agy` CLI** no Windows e faça login com a mesma conta Google usada na IDE Antigravity.
-2. Baixe o [`agy-gateway-windows-amd64.exe`](https://github.com/Phoenix7290/agy-mobile-gateway/releases/download/v3.3.0/agy-gateway-windows-amd64.exe) e execute-o com `$env:GATEWAY_MODE = "standalone"` na pasta do workspace aberto na IDE.
+2. Baixe o [`agy-gateway-windows-amd64.exe`](https://github.com/AetherCore-Works/agy-mobile/releases/download/v3.3.0/agy-gateway-windows-amd64.exe) e execute-o com `$env:GATEWAY_MODE = "standalone"` na pasta do workspace aberto na IDE.
 3. Pelo celular, o colega envia o pedido na interface web (`http://<IP>:8088`).
 4. O gateway dispara o `agy` em segundo plano (`CREATE_NO_WINDOW`, sem abrir janela preta) editando os arquivos do projeto diretamente — **a IDE aberta no Windows reflete as alterações dos arquivos na hora**.
 
@@ -116,7 +116,7 @@ Como funciona:
 Ideal para manter um servidor pequeno (Raspberry Pi `aarch64` ou `x86_64`) sempre online com Wake-on-LAN, Terminal Web (`ttyd`), Watchdog e Cloudflare Access / Tailscale:
 
 ```bash
-git clone https://github.com/Phoenix7290/agy-mobile-gateway.git /opt/stacks/agy-gateway
+git clone https://github.com/AetherCore-Works/agy-mobile.git /opt/stacks/agy-gateway
 cd /opt/stacks/agy-gateway
 
 mkdir -p ssh data

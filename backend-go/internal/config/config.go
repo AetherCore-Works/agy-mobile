@@ -177,8 +177,8 @@ func Load() GatewaySettings {
 	defaultHost := "127.0.0.1"
 	defaultUser := envOr("USER", envOr("USERNAME", "local"))
 	if isGateway {
-		defaultMAC = "00:00:00:00:00:00"
-		defaultHost = "192.0.2.10"
+		defaultMAC = ""
+		defaultHost = "127.0.0.1"
 		defaultUser = "ai"
 	}
 

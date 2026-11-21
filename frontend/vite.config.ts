@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 
+const gatewayTarget = process.env.VITE_GATEWAY_URL || 'http://127.0.0.1:8088';
+
 export default defineConfig({
   plugins: [tailwindcss(), svelte()],
   build: {
@@ -11,9 +13,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://192.0.2.20:8088',
+      '/api': gatewayTarget,
       '/terminal/ws': {
-        target: 'ws://192.0.2.20:8088',
+        target: gatewayTarget.replace(/^http/, 'ws'),
         ws: true,
       },
     },

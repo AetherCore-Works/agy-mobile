@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="/home/user/code/agy-mobile-gateway"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RPI_HOST="${RPI_HOST:-rpi}"
 RPI_STACK_DIR="/opt/stacks/agy-gateway"
 

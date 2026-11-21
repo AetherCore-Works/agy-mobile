@@ -14,7 +14,7 @@
 ## Features
 
 - **Compiled Go Core (`backend-go/`):** Single zero-CGO static binary embedding the compiled Svelte 5 frontend (`//go:embed`) and SQLite `WAL` + `FTS5` via `modernc.org/sqlite`.
-- **Prebuilt Binaries Available:** Download ready-to-run executables for Windows (`x86_64`), Linux (`x86_64`/`arm64`), and macOS (`arm64`) from [GitHub Releases](https://github.com/Phoenix7290/agy-mobile-gateway/releases/latest).
+- **Prebuilt Binaries Available:** Download ready-to-run executables for Windows (`x86_64`), Linux (`x86_64`/`arm64`), and macOS (`arm64`) from [GitHub Releases](https://github.com/AetherCore-Works/agy-mobile/releases/latest).
 - **Mobile-First Svelte 5 PWA:** Compiled with Vite + TypeScript + Tailwind CSS v4 (`~120 KB` gzipped), designed for one-handed smartphone use with zero horizontal overflow.
 - **Resumable Job Engine & SSE:** Decoupled job execution persisted in SQLite (`WAL` mode) with `after=` / `Last-Event-ID` stream resumption and `visibilitychange` auto-reconnect (survives switching apps on iOS/Android).
 - **Three Gateway Modes (`GATEWAY_MODE`):** `standalone` (local PC on Linux/macOS/Windows), `gateway` (24/7 Raspberry Pi orchestrating workstation over SSH/SCP + WoL), and `ide-bridge` (`.agy-bridge/inbox|outbox` JSON file-queue bridge).
@@ -85,11 +85,11 @@ agy-mobile-gateway/
 See the full multi-platform guide (including direct Windows binary downloads, Antigravity IDE workflows, and optional mods) in [docs/INSTALL.md](docs/INSTALL.md).
 
 ### 1. Standalone (Prebuilt Release Binary)
-Download the matching binary for your OS from [GitHub Releases](https://github.com/Phoenix7290/agy-mobile-gateway/releases/latest) and run it with `GATEWAY_MODE=standalone`.
+Download the matching binary for your OS from [GitHub Releases](https://github.com/AetherCore-Works/agy-mobile/releases/latest) and run it with `GATEWAY_MODE=standalone`.
 
 ### 2. Gateway Setup (Raspberry Pi / Docker)
 ```bash
-git clone https://github.com/Phoenix7290/agy-mobile-gateway.git /opt/stacks/agy-gateway
+git clone https://github.com/AetherCore-Works/agy-mobile.git /opt/stacks/agy-gateway
 cd /opt/stacks/agy-gateway
 mkdir -p ssh data
 ssh-keygen -t ed25519 -f ssh/id_ed25519 -N "" -C "agy-gateway"
