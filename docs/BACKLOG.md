@@ -33,3 +33,17 @@ Responsabilidades do núcleo Go (`agy-gateway`), banco SQLite, Scheduler e integ
 
 ## 4. Ecossistema Bot — Aegys Bot (Repositório Dedicado)
 A camada conversacional multi-canal (Discord, Telegram, WhatsApp via providers plugáveis, roteamento híbrido *Fast-Path/AI-Path* e RBAC em 2 níveis) evolui no repositório dedicado **[AetherCore-Works/aegys-bot](https://github.com/AetherCore-Works/aegys-bot)**, consumindo a API do `agy-gateway` ou backends LLM standalone.
+
+---
+
+## 5. Próximos Refinamentos de Terminal, Multi-Host & UX Mobile (Planejamento)
+Itens aprovados para planejamento e execução em ciclos futuros:
+
+- [ ] **Login SSH por Chave no `agy-ttyd`:**
+  - Montar `./ssh:/root/.ssh:ro` (com chave dedicada opcional) no serviço `agy-ttyd` do `compose.yaml` e suporte a flag para abrir o shell remoto sem pedir senha no celular a cada sessão.
+- [ ] **Seletor Multi-Host no Topo, Terminal e Cockpit (`CachyCore` ↔ `Dell G15` ↔ `RPi`):**
+  - Permitir alternar o nó alvo do homelab diretamente pela PWA para abrir sessões SSH e inspecionar telemetria/containers em múltiplos hosts.
+- [ ] **Code Splitting / Lazy-Loading do `@xterm/xterm` e Modais:**
+  - Carregar `TerminalModal` (e o motor `xterm.js`), highlighters de código e modais secundários sob demanda via `import()`, reduzindo o chunk principal (~696 kB) e acelerando o carregamento em 4G/5G.
+- [ ] **Timeline Visual de Tool Calls & Diffs no Chat:**
+  - Adicionar um acordeão discreto e colapsável nas respostas do agente exibindo as ferramentas executadas, comandos rodados e arquivos modificados sem poluir o texto principal.
