@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -15,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
@@ -30,6 +31,24 @@ func envTruthy(raw string) bool {
 	}
 }
 
+func shouldRunConsoleController(goos string, args []string, headlessEnv, noConsoleEnv string, interactive bool) bool {
+	if slices.Contains(args, "--daemon") || envTruthy(headlessEnv) {
+		return false
+	}
+	if slices.Contains(args, "--console") {
+		return true
+	}
+	// Interactive console panel is automatic only on Windows (double-click UX).
+	// On Linux/macOS, running agy-gateway without flags keeps standard foreground server behavior.
+	if goos != "windows" {
+		return false
+	}
+	if envTruthy(noConsoleEnv) || !interactive {
+		return false
+	}
+	return true
+}
+
 func maybeRunConsoleController() bool {
 	args := os.Args[1:]
 
@@ -38,12 +57,13 @@ func maybeRunConsoleController() bool {
 		return true
 	}
 
-	if slices.Contains(args, "--daemon") || envTruthy(os.Getenv("AGY_HEADLESS")) {
-		return false
-	}
-
-	forceConsole := slices.Contains(args, "--console")
-	if !forceConsole && (envTruthy(os.Getenv("AGY_NO_CONSOLE")) || !isInteractiveConsole()) {
+	if !shouldRunConsoleController(
+		runtime.GOOS,
+		args,
+		os.Getenv("AGY_HEADLESS"),
+		os.Getenv("AGY_NO_CONSOLE"),
+		isInteractiveConsole(),
+	) {
 		return false
 	}
 
@@ -115,6 +135,14 @@ func handleAutostartCLI(args []string) {
 	}
 }
 
+func generateCockpitToken() string {
+	var buf [24]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("agy-cockpit-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf[:])
+}
+
 func ensureDefaultConfigEnv() {
 	if _, custom := os.LookupEnv("DATA_DIR"); custom {
 		return
@@ -135,6 +163,7 @@ func ensureDefaultConfigEnv() {
 	}
 	_ = os.MkdirAll(cfgDir, 0o755)
 	workDir := resolveConsoleWorkDir(cfgDir)
+	cockpitToken := generateCockpitToken()
 	content := strings.Join([]string{
 		"GATEWAY_MODE=standalone",
 		"PORT=8088",
@@ -144,7 +173,8 @@ func ensureDefaultConfigEnv() {
 		"ENABLE_OLLAMA=true",
 		"COCKPIT_ADDR=127.0.0.1:8099",
 		"COCKPIT_URL=http://127.0.0.1:8099",
-		"COCKPIT_ALLOW_POWER=true",
+		"COCKPIT_ALLOW_POWER=false",
+		"COCKPIT_TOKEN=" + cockpitToken,
 		"TTYD_WS_URL=ws://127.0.0.1:7681/terminal/ws",
 		"AGY_WORKSPACE=" + workDir,
 		"",
@@ -184,22 +214,30 @@ func newConsoleSupervisor(cfg config.GatewaySettings) *consoleSupervisor {
 	}
 }
 
+func buildTtydArgs(goos, workDir, shellExe string) []string {
+	args := []string{"-i", "127.0.0.1", "-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "-w", workDir, shellExe}
+	base := strings.ToLower(filepath.Base(shellExe))
+	if goos == "windows" && (strings.Contains(base, "powershell") || base == "pwsh.exe" || base == "pwsh") {
+		args = append(args, "-NoLogo")
+	}
+	return args
+}
+
 func (s *consoleSupervisor) startSidecarsLocked() {
 	_ = os.MkdirAll(s.logDir, 0o755)
 	exeDir := filepath.Dir(s.exePath)
 
-	// 1. Optional ttyd terminal
+	// 1. Optional ttyd terminal (bound strictly to loopback so LAN clients must go through gateway proxy)
 	if enabled, _ := s.cfg.Mods["terminal"].(bool); enabled && !isLocalPortOpen(7681) {
 		if ttydBin, err := exec.LookPath("ttyd"); err == nil {
-			var ttydArgs []string
+			var shellExe string
 			if runtime.GOOS == "windows" {
-				shellExe := "powershell.exe"
+				shellExe = "powershell.exe"
 				if pwsh, err := exec.LookPath("pwsh"); err == nil {
 					shellExe = pwsh
 				}
-				ttydArgs = []string{"-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "-w", s.workDir, shellExe, "-NoLogo"}
 			} else {
-				shellExe := strings.TrimSpace(os.Getenv("SHELL"))
+				shellExe = strings.TrimSpace(os.Getenv("SHELL"))
 				if shellExe == "" {
 					if _, err := exec.LookPath("bash"); err == nil {
 						shellExe = "bash"
@@ -207,8 +245,8 @@ func (s *consoleSupervisor) startSidecarsLocked() {
 						shellExe = "sh"
 					}
 				}
-				ttydArgs = []string{"-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "-w", s.workDir, shellExe}
 			}
+			ttydArgs := buildTtydArgs(runtime.GOOS, s.workDir, shellExe)
 			_ = s.spawnLocked("ttyd", ttydBin, ttydArgs, s.workDir, nil, filepath.Join(s.logDir, "ttyd.log"))
 		}
 	}
@@ -227,7 +265,12 @@ func (s *consoleSupervisor) startSidecarsLocked() {
 			if _, err := os.Stat(c); err == nil {
 				extraEnv := []string{
 					"COCKPIT_ADDR=127.0.0.1:8099",
-					"COCKPIT_ALLOW_POWER=true",
+				}
+				if strings.TrimSpace(os.Getenv("COCKPIT_ALLOW_POWER")) == "" {
+					extraEnv = append(extraEnv, "COCKPIT_ALLOW_POWER=false")
+				}
+				if s.cfg.CockpitToken != "" {
+					extraEnv = append(extraEnv, "COCKPIT_TOKEN="+s.cfg.CockpitToken)
 				}
 				_ = s.spawnLocked("agy-cockpit", c, nil, exeDir, extraEnv, filepath.Join(s.logDir, "cockpit.log"))
 				break
@@ -372,7 +415,7 @@ func runControlConsoleUI(cfg config.GatewaySettings) {
 	}()
 
 	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, consoleSignals()...)
 
 	sup.startAll()
 

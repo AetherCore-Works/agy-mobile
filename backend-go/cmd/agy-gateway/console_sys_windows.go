@@ -83,6 +83,10 @@ func terminateChild(cmd *exec.Cmd) {
 	}
 }
 
+func consoleSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+}
+
 func cleanupPortsFallback(port string) {
 	_ = exec.Command("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
 		"$p8088=Get-NetTCPConnection -LocalPort "+port+" -State Listen -EA SilentlyContinue | Select -First 1 -Expand OwningProcess; if($p8088){Stop-Process -Id $p8088 -Force -EA SilentlyContinue}; "+

@@ -44,22 +44,14 @@ func terminateChild(cmd *exec.Cmd) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 
-func cleanupPortsFallback(port string) {
-	ports := []string{port, "8099", "7681"}
-	if _, err := exec.LookPath("fuser"); err == nil {
-		for _, p := range ports {
-			_ = exec.Command("fuser", "-k", p+"/tcp").Run()
-		}
-		return
-	}
-	if _, err := exec.LookPath("lsof"); err == nil {
-		for _, p := range ports {
-			out, _ := exec.Command("lsof", "-ti", "tcp:"+p).Output()
-			for _, line := range strings.Fields(string(out)) {
-				_ = exec.Command("kill", "-TERM", line).Run()
-			}
-		}
-	}
+func consoleSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+}
+
+func cleanupPortsFallback(_ string) {
+	// Intentionally no-op on Unix: never run indiscriminate fuser/lsof kills by port,
+	// because it can terminate unrelated services or conflict with systemd user units.
+	// Owned child process groups are terminated explicitly by terminateChild().
 }
 
 func prepareConsoleDisplay() {

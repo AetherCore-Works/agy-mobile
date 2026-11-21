@@ -88,6 +88,9 @@ if (-not (Test-Path $ResolvedAgyBin)) {
 }
 
 if (-not (Test-Path $EnvFile)) {
+    $rngBytes = New-Object byte[] 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($rngBytes)
+    $CockpitToken = ([System.BitConverter]::ToString($rngBytes) -replace "-", "").ToLowerInvariant()
     $defaultEnv = @"
 GATEWAY_MODE=standalone
 PORT=$Port
@@ -97,7 +100,8 @@ ENABLE_COCKPIT=true
 ENABLE_OLLAMA=true
 COCKPIT_ADDR=127.0.0.1:8099
 COCKPIT_URL=http://127.0.0.1:8099
-COCKPIT_ALLOW_POWER=true
+COCKPIT_ALLOW_POWER=false
+COCKPIT_TOKEN=$CockpitToken
 TTYD_WS_URL=ws://127.0.0.1:7681/terminal/ws
 AGY_BIN=$ResolvedAgyBin
 AGY_WORKSPACE=$WorkspaceDir

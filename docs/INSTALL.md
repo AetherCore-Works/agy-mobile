@@ -20,9 +20,10 @@ Baixe o pacote pronto para o seu sistema operacional na página oficial de **[Gi
 | **Linux (ARM64 / Raspberry Pi bundle)** | `agy-mobile-gateway-linux-arm64-bundle.tar.gz` (ou `agy-gateway-linux-arm64`) |
 | **macOS (Apple Silicon / Intel bundle)** | `agy-mobile-gateway-darwin-arm64-bundle.tar.gz` / `darwin-amd64` |
 
-Ao executar o `agy-gateway` interativamente no Windows, Linux ou macOS:
+Ao executar o `agy-gateway` interativamente no **Windows** (ou passando `--console` no Linux/macOS):
 - Abre o **Painel de Controle no Terminal** (`[1]` Ligar, `[2]` Desligar/Privacidade, `[4]` Abrir Navegador, `[7]` Ligar/Desligar Auto-Start no boot, `[8]` Criar Atalho no Menu/Desktop, `[Q]` Fechar encerrando tudo);
-- Na primeira execução sem `.env`, cria automaticamente um `.env` padrão em `%LOCALAPPDATA%\agy-gateway\.env` (Windows), `~/Library/Application Support/agy-gateway/.env` (macOS) ou `~/.config/agy-gateway/.env` (Linux).
+- No Linux/macOS sem flags, `agy-gateway` mantém o comportamento padrão Unix (servidor HTTP direto no foreground com logs no `stdout`), ideal para `systemd`, `tmux` ou Docker Compose;
+- Na primeira execução sem `.env`, cria automaticamente um `.env` padrão seguro (`COCKPIT_ALLOW_POWER=false` e `COCKPIT_TOKEN` gerado localmente) em `%LOCALAPPDATA%\agy-gateway\.env` (Windows), `~/Library/Application Support/agy-gateway/.env` (macOS) ou `~/.config/agy-gateway/.env` (Linux).
 
 ---
 

@@ -61,6 +61,13 @@ ENV_FILE="$CFG_DIR/.env"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   AGY_RESOLVED="$(command -v agy || echo agy)"
+  # Generate random local Cockpit token if openssl or /dev/urandom is available
+  COCKPIT_TOK=""
+  if command -v openssl >/dev/null 2>&1; then
+    COCKPIT_TOK="$(openssl rand -hex 24)"
+  elif command -v python3 >/dev/null 2>&1; then
+    COCKPIT_TOK="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+  fi
   cat >"$ENV_FILE" <<EOF
 GATEWAY_MODE=standalone
 PORT=8088
@@ -70,7 +77,8 @@ ENABLE_COCKPIT=true
 ENABLE_OLLAMA=true
 COCKPIT_ADDR=127.0.0.1:8099
 COCKPIT_URL=http://127.0.0.1:8099
-COCKPIT_ALLOW_POWER=true
+COCKPIT_ALLOW_POWER=false
+COCKPIT_TOKEN=$COCKPIT_TOK
 TTYD_WS_URL=ws://127.0.0.1:7681/terminal/ws
 AGY_BIN=$AGY_RESOLVED
 AGY_WORKSPACE=$REPO_DIR
@@ -78,40 +86,18 @@ EOF
   chmod 600 "$ENV_FILE"
 fi
 
-echo "==> [4/4] Configurando atalho e auto-start..."
+echo "==> [4/4] Configurando auto-start (opcional)..."
 if [[ "$AUTOSTART" == "true" ]]; then
   "$PREFIX_BIN/agy-gateway" --autostart on
 else
   "$PREFIX_BIN/agy-gateway" --autostart off >/dev/null 2>&1 || true
 fi
 
-if [[ "$OS_NAME" == "Darwin" ]]; then
-  mkdir -p "$HOME/Applications"
-  cat >"$HOME/Applications/AGY Gateway.command" <<EOF
-#!/bin/bash
-cd "$REPO_DIR" || true
-exec "$PREFIX_BIN/agy-gateway" --console
-EOF
-  chmod +x "$HOME/Applications/AGY Gateway.command"
-else
-  mkdir -p "$HOME/.local/share/applications"
-  cat >"$HOME/.local/share/applications/agy-gateway.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=AGY Mobile Gateway
-Comment=Painel interativo do AGY Mobile Gateway
-Exec="$PREFIX_BIN/agy-gateway" --console
-Path=$REPO_DIR
-Terminal=true
-Categories=Development;Utility;
-EOF
-  chmod +x "$HOME/.local/share/applications/agy-gateway.desktop"
-fi
-
 if [[ "$START_NOW" == "true" ]]; then
-  exec "$PREFIX_BIN/agy-gateway" --console
+  exec "$PREFIX_BIN/agy-gateway"
 fi
 
 echo "==> Instalacao concluida!"
-echo "    Execute '$PREFIX_BIN/agy-gateway' para abrir o painel interativo (ou use o menu de apps)."
+echo "    Execute '$PREFIX_BIN/agy-gateway' para iniciar o servidor no foreground."
+echo "    (Opcional: use '--autostart on' para registrar systemd --user, ou '--console' para abrir o painel TUI.)"
 echo "    Lembre de garantir $PREFIX_BIN no seu PATH."
