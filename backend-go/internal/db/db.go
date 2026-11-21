@@ -304,6 +304,36 @@ func (g *GatewayDB) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_conversation_artifacts_conv
 		ON conversation_artifacts(conv_id, id);
 
+	CREATE TABLE IF NOT EXISTS host_profiles (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		host TEXT NOT NULL,
+		ssh_user TEXT NOT NULL,
+		ssh_port TEXT NOT NULL DEFAULT '22',
+		wol_mac TEXT NOT NULL DEFAULT '',
+		os_hint TEXT NOT NULL DEFAULT 'linux',
+		is_active INTEGER NOT NULL DEFAULT 0,
+		sort_order INTEGER NOT NULL DEFAULT 100,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS webauthn_credentials (
+		id TEXT PRIMARY KEY,
+		credential_id TEXT NOT NULL UNIQUE,
+		public_key_x TEXT NOT NULL,
+		public_key_y TEXT NOT NULL,
+		sign_count INTEGER NOT NULL DEFAULT 0,
+		label TEXT NOT NULL DEFAULT 'Dispositivo',
+		created_at TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS bot_sessions (
+		session_key TEXT PRIMARY KEY,
+		conversation_id TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	);
+
 	CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
 		USING fts5(conv_id UNINDEXED, title, content, tokenize='unicode61');
 	`
@@ -893,4 +923,40 @@ func (g *GatewayDB) SearchFTS(query string, limit int) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// GetBotSession loads the active conversation ID mapped to a bot chat key (e.g. "telegram:12345").
+func (g *GatewayDB) GetBotSession(sessionKey string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	var convID string
+	err := g.sql.QueryRow("SELECT conversation_id FROM bot_sessions WHERE session_key = ?", sessionKey).Scan(&convID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return convID, err
+}
+
+// SetBotSession persists the active conversation ID for a bot chat key.
+func (g *GatewayDB) SetBotSession(sessionKey, convID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	_, err := g.sql.Exec(
+		`INSERT INTO bot_sessions (session_key, conversation_id, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(session_key) DO UPDATE SET conversation_id = excluded.conversation_id, updated_at = excluded.updated_at`,
+		sessionKey, convID, utcNow(),
+	)
+	return err
+}
+
+// ClearBotSession deletes the mapped conversation ID for a bot chat key (/new).
+func (g *GatewayDB) ClearBotSession(sessionKey string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	_, err := g.sql.Exec("DELETE FROM bot_sessions WHERE session_key = ?", sessionKey)
+	return err
 }

@@ -97,11 +97,24 @@ type TelemetryData struct {
 	Enabled bool     `json:"enabled,omitempty"`
 }
 
+// HostTarget describes the active target host for multi-host switching.
+type HostTarget struct {
+	ID     string
+	Name   string
+	Host   string
+	User   string
+	Port   string
+	WolMAC string
+	OSHint string
+}
+
 // Runner abstracts local (standalone) vs SSH (gateway) execution.
 type Runner interface {
 	CheckOnline(ctx context.Context, timeout time.Duration) bool
 	ActiveOS(ctx context.Context) string
 	HostName(ctx context.Context) string
+	SetActiveHost(target HostTarget)
+	ActiveTarget() HostTarget
 	StartAGYProcess(ctx context.Context, args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error)
 	OpenOllamaChat(ctx context.Context, payload []byte) (io.ReadCloser, func() error, error)
 	ListAGYModels(ctx context.Context) []ModelInfo
@@ -210,6 +223,20 @@ func (r *LocalRunner) HostName(_ context.Context) string {
 		}
 	}
 	return ""
+}
+
+func (r *LocalRunner) SetActiveHost(_ HostTarget) {}
+
+func (r *LocalRunner) ActiveTarget() HostTarget {
+	return HostTarget{
+		ID:     "local",
+		Name:   r.HostName(context.Background()),
+		Host:   "127.0.0.1",
+		User:   r.cfg.TargetUser,
+		Port:   r.cfg.TargetSSHPort,
+		WolMAC: r.cfg.WolMAC,
+		OSHint: runtime.GOOS,
+	}
 }
 
 func (r *LocalRunner) StartAGYProcess(ctx context.Context, args []string) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
@@ -586,11 +613,13 @@ type SSHRunner struct {
 	cfg config.GatewaySettings
 
 	targetMu         sync.RWMutex
+	activeHost       *HostTarget
 	cachedOS         string
 	cachedAt         time.Time
 	cachedOnline     bool
 	cachedOnlineAt   time.Time
 	cachedHostName   string
+	cachedHostKey    string
 	cachedHostNameAt time.Time
 }
 
@@ -604,15 +633,69 @@ type sshTarget struct {
 	outboxDir string
 }
 
+func (r *SSHRunner) SetActiveHost(target HostTarget) {
+	r.targetMu.Lock()
+	defer r.targetMu.Unlock()
+	if strings.TrimSpace(target.Host) == "" {
+		r.activeHost = nil
+	} else {
+		cp := target
+		if cp.Port == "" {
+			cp.Port = "22"
+		}
+		r.activeHost = &cp
+	}
+	r.cachedOS = ""
+	r.cachedAt = time.Time{}
+	r.cachedOnline = false
+	r.cachedOnlineAt = time.Time{}
+	r.cachedHostName = ""
+	r.cachedHostKey = ""
+	r.cachedHostNameAt = time.Time{}
+}
+
+func (r *SSHRunner) ActiveTarget() HostTarget {
+	r.targetMu.RLock()
+	active := r.activeHost
+	r.targetMu.RUnlock()
+	if active != nil {
+		return *active
+	}
+	return HostTarget{
+		ID:     "host-default",
+		Name:   r.cfg.TargetHost,
+		Host:   r.cfg.TargetHost,
+		User:   r.cfg.TargetUser,
+		Port:   r.cfg.TargetSSHPort,
+		WolMAC: r.cfg.WolMAC,
+		OSHint: "linux",
+	}
+}
+
 func (r *SSHRunner) linuxTarget() sshTarget {
+	r.targetMu.RLock()
+	active := r.activeHost
+	r.targetMu.RUnlock()
+
+	host := r.cfg.TargetHost
+	user := r.cfg.TargetUser
 	port := r.cfg.TargetSSHPort
+	if active != nil && active.Host != "" {
+		host = active.Host
+		if active.User != "" {
+			user = active.User
+		}
+		if active.Port != "" {
+			port = active.Port
+		}
+	}
 	if port == "" {
 		port = "22"
 	}
 	return sshTarget{
 		osName:    "linux",
-		host:      r.cfg.TargetHost,
-		user:      r.cfg.TargetUser,
+		host:      host,
+		user:      user,
 		port:      port,
 		agyBin:    ResolveAGYBinary(),
 		inboxDir:  r.cfg.Dirs.InboxDir,
@@ -649,6 +732,12 @@ func (r *SSHRunner) windowsTarget() sshTarget {
 }
 
 func (r *SSHRunner) hasDualBoot() bool {
+	r.targetMu.RLock()
+	active := r.activeHost
+	r.targetMu.RUnlock()
+	if active != nil && active.ID != "" && active.ID != "host-default" {
+		return false
+	}
 	return r.cfg.WinTargetUser != "" && r.cfg.WinTargetHost != ""
 }
 
@@ -717,36 +806,48 @@ func (r *SSHRunner) ActiveOS(ctx context.Context) string {
 	return r.resolveTarget(ctx).osName
 }
 
-func (r *SSHRunner) hostNameCacheFile() string {
+func (r *SSHRunner) hostNameCacheFile(hostKey string) string {
 	if r.cfg.Dirs.CacheDir == "" {
 		return ""
 	}
-	return filepath.Join(r.cfg.Dirs.CacheDir, "target_hostname")
+	safe := strings.NewReplacer("@", "_", ":", "_", "/", "_", "\\", "_").Replace(hostKey)
+	return filepath.Join(r.cfg.Dirs.CacheDir, "target_hostname_"+safe)
 }
 
 func (r *SSHRunner) HostName(ctx context.Context) string {
-	if envName := cleanHostName(os.Getenv("HOST_NAME")); envName != "" {
-		return envName
+	r.targetMu.RLock()
+	active := r.activeHost
+	r.targetMu.RUnlock()
+	if active != nil && strings.TrimSpace(active.Name) != "" && strings.TrimSpace(active.Name) != strings.TrimSpace(active.Host) {
+		return strings.TrimSpace(active.Name)
 	}
+	if active == nil || active.ID == "" || active.ID == "host-default" {
+		if envName := cleanHostName(os.Getenv("HOST_NAME")); envName != "" {
+			return envName
+		}
+	}
+
+	t := r.linuxTarget()
+	hostKey := t.user + "@" + t.host + ":" + t.port
 
 	r.targetMu.RLock()
 	cached := r.cachedHostName
-	fresh := !r.cachedHostNameAt.IsZero() && time.Since(r.cachedHostNameAt) < 5*time.Minute
+	fresh := r.cachedHostKey == hostKey && !r.cachedHostNameAt.IsZero() && time.Since(r.cachedHostNameAt) < 5*time.Minute
 	r.targetMu.RUnlock()
 
 	if fresh && cached != "" {
 		return cached
 	}
 
-	if cached == "" {
-		if cf := r.hostNameCacheFile(); cf != "" {
+	if cached == "" || r.cachedHostKey != hostKey {
+		cached = ""
+		if cf := r.hostNameCacheFile(hostKey); cf != "" {
 			if b, err := os.ReadFile(cf); err == nil {
 				if persisted := cleanHostName(string(b)); persisted != "" {
 					r.targetMu.Lock()
-					if r.cachedHostName == "" {
-						r.cachedHostName = persisted
-					}
-					cached = r.cachedHostName
+					r.cachedHostName = persisted
+					r.cachedHostKey = hostKey
+					cached = persisted
 					r.targetMu.Unlock()
 				}
 			}
@@ -768,10 +869,11 @@ func (r *SSHRunner) HostName(ctx context.Context) string {
 
 	r.targetMu.Lock()
 	r.cachedHostName = detected
+	r.cachedHostKey = hostKey
 	r.cachedHostNameAt = time.Now()
 	r.targetMu.Unlock()
 
-	if cf := r.hostNameCacheFile(); cf != "" {
+	if cf := r.hostNameCacheFile(hostKey); cf != "" {
 		_ = os.MkdirAll(filepath.Dir(cf), 0o755)
 		_ = os.WriteFile(cf, []byte(detected+"\n"), 0o644)
 	}

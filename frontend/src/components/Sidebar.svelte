@@ -11,11 +11,16 @@
   import { loadOptionalCockpitPanel } from "../lib/optionalCockpit";
   import {
     deleteConversation,
+    deleteWebAuthnCredential,
+    fetchAuthStatus,
     fetchConversations,
     fetchTelemetry,
     fetchWatchdog,
+    registerWebAuthnPasskey,
+    saveAuthPIN,
     updateConversationMeta,
     updateSettings,
+    type AuthStatus,
     type ConversationSummary,
     type GatewaySettings,
     type ModelInfo,
@@ -48,6 +53,8 @@
     slashCommandCount = 0,
     onSettingsSaved,
     onThemeChange,
+    onLockSession,
+    onAuthChanged,
   }: {
     open: boolean;
     activeConvId: string | null;
@@ -67,6 +74,8 @@
     slashCommandCount?: number;
     onSettingsSaved: (s: GatewaySettings) => void;
     onThemeChange: (mode: ThemeMode, palette: ThemePalette) => void;
+    onLockSession?: () => void;
+    onAuthChanged?: () => void;
   } = $props();
 
   let CockpitComp = $state<Component<{ active?: boolean }> | null>(null);
@@ -85,6 +94,10 @@
   let settingsSavedMsg = $state("");
   let watchdog = $state<WatchdogState | null>(null);
   let telemetry = $state<TelemetryData | null>(null);
+  let authStatus = $state<AuthStatus | null>(null);
+  let pinDraft = $state("");
+  let authSaving = $state(false);
+  let authNotice = $state("");
 
   // Inline session organization editor state
   let editingId = $state<string | null>(null);
@@ -247,6 +260,9 @@
             .then((t) => (telemetry = t))
             .catch(() => {});
         }
+        fetchAuthStatus()
+          .then((a) => (authStatus = a))
+          .catch(() => {});
       }
     });
   });
@@ -835,6 +851,141 @@
             {/if}
           </button>
         {/if}
+
+            {#if onLockSession && authStatus?.enabled}
+              <button
+                type="button"
+                onclick={() => {
+                  open = false;
+                  onLockSession?.();
+                }}
+                class="w-full p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <Icon name="lock" size={14} />
+                <span>Bloquear Gateway Agora</span>
+              </button>
+            {/if}
+
+        <!-- Segurança: PIN / Token & Biometria -->
+        <div
+          class="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] space-y-2.5 theme-surface"
+        >
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]">
+              <Icon name="shield" size={14} class="text-[var(--accent-fg)]" />
+              <span>Segurança &amp; Bloqueio</span>
+            </div>
+            <Badge variant={authStatus?.enabled ? "emerald" : "outline"} size="xs">
+              {authStatus?.enabled ? "Ativo" : "Aberto"}
+            </Badge>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <Input
+              type="password"
+              bind:value={pinDraft}
+              placeholder={authStatus?.has_pin ? "Novo PIN (4+ dígitos)" : "Definir PIN rápido"}
+              class="h-8 text-xs font-mono"
+            />
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={authSaving || pinDraft.trim().length < 4}
+              onclick={async () => {
+                authSaving = true;
+                authNotice = "";
+                try {
+                  await saveAuthPIN(pinDraft.trim());
+                  pinDraft = "";
+                  authStatus = await fetchAuthStatus();
+                  authNotice = "PIN salvo no cookie HttpOnly.";
+                  onAuthChanged?.();
+                } catch (err: any) {
+                  authNotice = err?.message || "Erro ao salvar PIN";
+                } finally {
+                  authSaving = false;
+                }
+              }}
+            >
+              Salvar
+            </Button>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5">
+            {#if typeof window !== "undefined" && window.isSecureContext && "PublicKeyCredential" in window}
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={authSaving}
+                onclick={async () => {
+                  authSaving = true;
+                  authNotice = "";
+                  try {
+                    const label = /iPhone|iPad/i.test(navigator.userAgent)
+                      ? "iPhone / FaceID"
+                      : /Android/i.test(navigator.userAgent)
+                        ? "Android Biometria"
+                        : "Passkey Desktop";
+                    await registerWebAuthnPasskey(label);
+                    authStatus = await fetchAuthStatus();
+                    authNotice = "Biometria registrada!";
+                    onAuthChanged?.();
+                  } catch (err: any) {
+                    authNotice = err?.message || "Erro ao registrar biometria";
+                  } finally {
+                    authSaving = false;
+                  }
+                }}
+              >
+                <Icon name="plus" size={12} />
+                <span>Ativar Biometria / Passkey</span>
+              </Button>
+            {/if}
+            {#if authStatus?.has_pin}
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={authSaving}
+                class="text-rose-400 hover:bg-rose-500/10"
+                onclick={async () => {
+                  authSaving = true;
+                  authNotice = "";
+                  try {
+                    await saveAuthPIN("");
+                    authStatus = await fetchAuthStatus();
+                    authNotice = "PIN removido.";
+                    onAuthChanged?.();
+                  } finally {
+                    authSaving = false;
+                  }
+                }}
+              >
+                Remover PIN
+              </Button>
+            {/if}
+          </div>
+          {#if authStatus?.credentials && authStatus.credentials.length > 0}
+            <div class="space-y-1 pt-1 border-t border-[var(--border-subtle)]">
+              {#each authStatus.credentials as cred (cred.id)}
+                <div class="flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+                  <span class="truncate">{cred.label}</span>
+                  <button
+                    type="button"
+                    class="text-rose-400 hover:underline text-[10px]"
+                    onclick={async () => {
+                      await deleteWebAuthnCredential(cred.id);
+                      authStatus = await fetchAuthStatus();
+                      onAuthChanged?.();
+                    }}
+                  >
+                    Remover
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if authNotice}
+            <p class="text-[11px] text-[var(--accent-fg)]">{authNotice}</p>
+          {/if}
+        </div>
 
         {#if watchdogEnabled && watchdog}
           <div

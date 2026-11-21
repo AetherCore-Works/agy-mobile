@@ -40,6 +40,7 @@ type GatewaySettings struct {
 	IDEBridgeTimeoutSec    int
 	TLSCertFile            string
 	TLSKeyFile             string
+	AuthToken              string
 	WebhookSecret          string
 	EvolutionAPIURL        string
 	EvolutionInstance      string
@@ -48,6 +49,10 @@ type GatewaySettings struct {
 	WhatsAppWebhookSecret  string
 	DiscordBotToken        string
 	DiscordAllowedUserIDs  []string
+	TelegramBotToken       string
+	TelegramAllowedChatIDs []string
+	TelegramMode           string
+	TelegramWebhookSecret  string
 	Dirs                   AppDirs
 	Mods                   map[string]any
 }
@@ -223,6 +228,13 @@ func Load() GatewaySettings {
 	winInboxDir := envOr("WIN_INBOX_DIR", "")
 	winOutboxDir := envOr("WIN_OUTBOX_DIR", "")
 	dualBootEnabled := isGateway && winTargetUser != "" && winTargetHost != ""
+	authToken := envOr("GATEWAY_AUTH_TOKEN", "")
+	telegramToken := envOr("TELEGRAM_BOT_TOKEN", "")
+	telegramAllowed := splitCSV(envOr("TELEGRAM_ALLOWED_CHAT_IDS", envOr("ALLOWED_CHAT_ID", envOr("TELEGRAM_ALLOWED_CHAT_ID", ""))))
+	telegramMode := strings.ToLower(envOr("TELEGRAM_MODE", "polling"))
+	if telegramMode != "webhook" {
+		telegramMode = "polling"
+	}
 
 	mods := map[string]any{
 		"terminal":     boolEnv("ENABLE_TERMINAL", isGateway),
@@ -240,10 +252,11 @@ func Load() GatewaySettings {
 		"web_push":     true,
 		"ide_bridge":   isIDEBridge,
 		"telemetry":    boolEnv("ENABLE_TELEMETRY", isGateway),
+		"auth":         authToken != "",
 		"webhooks":     boolEnv("ENABLE_WEBHOOKS", false),
 		"whatsapp_bot": boolEnv("ENABLE_WHATSAPP_BOT", false),
 		"discord_bot":  boolEnv("ENABLE_DISCORD_BOT", false),
-		"telegram_bot": boolEnv("ENABLE_TELEGRAM_BOT", false),
+		"telegram_bot": boolEnv("ENABLE_TELEGRAM_BOT", telegramToken != "" && len(telegramAllowed) > 0),
 		"slash_commands": []string{
 			"/compact", "/usage", "/diff", "/mem", "/plan", "/clear", "/status",
 		},
@@ -272,6 +285,7 @@ func Load() GatewaySettings {
 		IDEBridgeTimeoutSec:    bridgeTimeout,
 		TLSCertFile:            tlsCertFile,
 		TLSKeyFile:             tlsKeyFile,
+		AuthToken:              authToken,
 		WebhookSecret:          envOr("WEBHOOK_SECRET", ""),
 		EvolutionAPIURL:        strings.TrimRight(envOr("EVOLUTION_API_URL", "http://127.0.0.1:8085"), "/"),
 		EvolutionInstance:      envOr("EVOLUTION_INSTANCE", "aegys"),
@@ -280,6 +294,10 @@ func Load() GatewaySettings {
 		WhatsAppWebhookSecret:  envOr("WHATSAPP_WEBHOOK_SECRET", ""),
 		DiscordBotToken:        envOr("DISCORD_BOT_TOKEN", ""),
 		DiscordAllowedUserIDs:  splitCSV(envOr("DISCORD_ALLOWED_USER_IDS", "")),
+		TelegramBotToken:       telegramToken,
+		TelegramAllowedChatIDs: telegramAllowed,
+		TelegramMode:           telegramMode,
+		TelegramWebhookSecret:  envOr("TELEGRAM_WEBHOOK_SECRET", ""),
 		Dirs:                   dirs,
 		Mods:                   mods,
 	}

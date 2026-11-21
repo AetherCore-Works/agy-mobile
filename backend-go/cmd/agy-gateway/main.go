@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/auth"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/automation"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/botbridge"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
@@ -215,6 +216,20 @@ func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, 
 	return buildAppMux(cfg, store, r, mgr, wd, notifier, sched)
 }
 
+func buildProtectedHandler(
+	cfg config.GatewaySettings,
+	store *db.GatewayDB,
+	r runner.Runner,
+	mgr *jobs.Manager,
+	wd *watchdogState,
+	notifier *automation.Notifier,
+	sched *automation.Scheduler,
+) http.Handler {
+	authMgr := auth.NewManager(cfg, store)
+	mux := buildAppMuxWithAuth(cfg, store, r, mgr, wd, notifier, sched, authMgr)
+	return authMgr.Middleware(mux)
+}
+
 func buildAppMux(
 	cfg config.GatewaySettings,
 	store *db.GatewayDB,
@@ -224,6 +239,37 @@ func buildAppMux(
 	notifier *automation.Notifier,
 	sched *automation.Scheduler,
 ) *http.ServeMux {
+	return buildAppMuxWithAuth(cfg, store, r, mgr, wd, notifier, sched, auth.NewManager(cfg, store))
+}
+
+func syncActiveHostRunner(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner) {
+	if cfg.Mode == "gateway" && cfg.TargetHost != "" {
+		_ = store.EnsureDefaultHostProfile(cfg.TargetHost, cfg.TargetHost, cfg.TargetUser, cfg.TargetSSHPort, cfg.WolMAC, "linux")
+	}
+	if active, err := store.GetActiveHostProfile(); err == nil && active != nil {
+		r.SetActiveHost(runner.HostTarget{
+			ID:     active.ID,
+			Name:   active.Name,
+			Host:   active.Host,
+			User:   active.SSHUser,
+			Port:   active.SSHPort,
+			WolMAC: active.WolMAC,
+			OSHint: active.OSHint,
+		})
+	}
+}
+
+func buildAppMuxWithAuth(
+	cfg config.GatewaySettings,
+	store *db.GatewayDB,
+	r runner.Runner,
+	mgr *jobs.Manager,
+	wd *watchdogState,
+	notifier *automation.Notifier,
+	sched *automation.Scheduler,
+	authMgr *auth.Manager,
+) *http.ServeMux {
+	syncActiveHostRunner(cfg, store, r)
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, req *http.Request) {
@@ -235,6 +281,11 @@ func buildAppMux(
 	})
 
 	mux.HandleFunc("GET /api/features", func(w http.ResponseWriter, req *http.Request) {
+		modsCopy := make(map[string]any, len(cfg.Mods)+1)
+		for k, v := range cfg.Mods {
+			modsCopy[k] = v
+		}
+		modsCopy["auth"] = authMgr.IsEnabled()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"version":   appVersion,
 			"mode":      cfg.Mode,
@@ -243,28 +294,186 @@ func buildAppMux(
 				"inbox":  cfg.Dirs.InboxDir,
 				"outbox": cfg.Dirs.OutboxDir,
 			},
-			"features": cfg.Mods,
+			"features": modsCopy,
 		})
 	})
 
+	// --- Security & PIN / Token / WebAuthn Auth ---
+	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, req *http.Request) {
+		creds, _ := store.ListWebAuthnCredentials()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled":        authMgr.IsEnabled(),
+			"authenticated":  authMgr.IsAuthenticated(req),
+			"has_pin":        store.HasAuthPIN(),
+			"has_env_token":  strings.TrimSpace(cfg.AuthToken) != "",
+			"webauthn_count": len(creds),
+			"credentials":    creds,
+		})
+	})
+
+	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, req *http.Request) {
+		if !authMgr.IsEnabled() {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authenticated": true})
+			return
+		}
+		var body struct {
+			Token string `json:"token"`
+			PIN   string `json:"pin"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		secret := strings.TrimSpace(body.Token)
+		if secret == "" {
+			secret = strings.TrimSpace(body.PIN)
+		}
+		if !authMgr.VerifySecret(secret) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "PIN ou token inválido"})
+			return
+		}
+		authMgr.SetSessionCookie(w, req)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authenticated": true})
+	})
+
+	mux.HandleFunc("POST /api/auth/logout", func(w http.ResponseWriter, req *http.Request) {
+		authMgr.ClearSessionCookie(w, req)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authenticated": !authMgr.IsEnabled()})
+	})
+
+	mux.HandleFunc("PUT /api/auth/pin", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			PIN string `json:"pin"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		if err := store.SetAuthPIN(body.PIN); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+			return
+		}
+		if authMgr.IsEnabled() {
+			authMgr.SetSessionCookie(w, req)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": authMgr.IsEnabled(), "has_pin": store.HasAuthPIN()})
+	})
+
+	mux.HandleFunc("POST /api/auth/webauthn/register/options", func(w http.ResponseWriter, req *http.Request) {
+		chal := authMgr.IssueChallenge("register")
+		rpID := strings.Split(req.Host, ":")[0]
+		writeJSON(w, http.StatusOK, map[string]any{
+			"challenge": chal,
+			"rp": map[string]string{
+				"name": "AGY Mobile Gateway",
+				"id":   rpID,
+			},
+			"user": map[string]string{
+				"id":           "YWd5LWFkbWlu",
+				"name":         "agy-owner",
+				"displayName":  "AGY Owner",
+			},
+			"pubKeyCredParams": []map[string]any{
+				{"type": "public-key", "alg": -7},
+			},
+		})
+	})
+
+	mux.HandleFunc("POST /api/auth/webauthn/register/verify", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			ClientDataJSON    string `json:"clientDataJSON"`
+			AttestationObject string `json:"attestationObject"`
+			Label             string `json:"label"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		cred, err := authMgr.VerifyAndStoreRegistration(body.ClientDataJSON, body.AttestationObject, body.Label)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credential": cred})
+	})
+
+	mux.HandleFunc("POST /api/auth/webauthn/login/options", func(w http.ResponseWriter, req *http.Request) {
+		creds, _ := store.ListWebAuthnCredentials()
+		if len(creds) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Nenhuma biometria registrada"})
+			return
+		}
+		allow := make([]map[string]any, 0, len(creds))
+		for _, c := range creds {
+			allow = append(allow, map[string]any{"type": "public-key", "id": c.CredentialID})
+		}
+		rpID := strings.Split(req.Host, ":")[0]
+		writeJSON(w, http.StatusOK, map[string]any{
+			"challenge":        authMgr.IssueChallenge("login"),
+			"rpId":             rpID,
+			"allowCredentials": allow,
+		})
+	})
+
+	mux.HandleFunc("POST /api/auth/webauthn/login/verify", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			ID                string `json:"id"`
+			ClientDataJSON    string `json:"clientDataJSON"`
+			AuthenticatorData string `json:"authenticatorData"`
+			Signature         string `json:"signature"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		if err := authMgr.VerifyAssertion(body.ID, body.ClientDataJSON, body.AuthenticatorData, body.Signature); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": err.Error()})
+			return
+		}
+		authMgr.SetSessionCookie(w, req)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authenticated": true})
+	})
+
+	mux.HandleFunc("DELETE /api/auth/webauthn/{id}", func(w http.ResponseWriter, req *http.Request) {
+		if err := store.DeleteWebAuthnCredential(req.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, req *http.Request) {
+		active := r.ActiveTarget()
+		activeHost := active.Host
+		if activeHost == "" {
+			activeHost = cfg.TargetHost
+		}
+		activeUser := active.User
+		if activeUser == "" {
+			activeUser = cfg.TargetUser
+		}
+		activeMAC := active.WolMAC
+		if activeMAC == "" {
+			activeMAC = cfg.WolMAC
+		}
 		var wolMAC any
-		if enabled, _ := cfg.Mods["wol"].(bool); enabled && cfg.WolMAC != "" {
-			wolMAC = cfg.WolMAC
+		if activeMAC != "" && ((cfg.Mods["wol"] == true) || active.WolMAC != "") {
+			wolMAC = activeMAC
 		}
 		online := r.CheckOnline(req.Context(), 1500*time.Millisecond)
 		activeOS := r.ActiveOS(req.Context())
 		hostName := r.HostName(req.Context())
 		unreadAlerts, _ := store.CountUnreadAlerts()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"online":        online,
-			"mode":          cfg.Mode,
-			"active_os":     activeOS,
-			"host_name":     hostName,
-			"target_host":   cfg.TargetHost,
-			"wol_mac":       wolMAC,
-			"target_user":   cfg.TargetUser,
-			"unread_alerts": unreadAlerts,
+			"online":         online,
+			"mode":           cfg.Mode,
+			"active_os":      activeOS,
+			"active_host_id": active.ID,
+			"host_name":      hostName,
+			"target_host":    activeHost,
+			"wol_mac":        wolMAC,
+			"target_user":    activeUser,
+			"unread_alerts":  unreadAlerts,
 		})
 	})
 
@@ -283,23 +492,102 @@ func buildAppMux(
 	})
 
 	mux.HandleFunc("POST /api/wol", func(w http.ResponseWriter, req *http.Request) {
-		if enabled, _ := cfg.Mods["wol"].(bool); !enabled {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Wake-on-LAN não habilitado neste perfil"})
-			return
+		active := r.ActiveTarget()
+		macToWake := active.WolMAC
+		if macToWake == "" {
+			macToWake = cfg.WolMAC
 		}
 		var body wolRequest
 		if req.Body != nil {
 			_ = json.NewDecoder(req.Body).Decode(&body)
 		}
-		macToWake := cfg.WolMAC
 		if body.MAC != nil && strings.TrimSpace(*body.MAC) != "" {
 			macToWake = strings.TrimSpace(*body.MAC)
+		}
+		if macToWake == "" {
+			if enabled, _ := cfg.Mods["wol"].(bool); !enabled {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Wake-on-LAN não habilitado neste perfil"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "Nenhum MAC Wake-on-LAN configurado para este host"})
+			return
 		}
 		if err := wol.SendMagicPacket(macToWake); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": fmt.Sprintf("Erro ao enviar WoL: %v", err)})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": fmt.Sprintf("Magic Packet enviado para %s", macToWake)})
+	})
+
+	// --- Multi-PC Host Profiles ---
+	mux.HandleFunc("GET /api/hosts", func(w http.ResponseWriter, _ *http.Request) {
+		hosts, err := store.ListHostProfiles()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"hosts":          hosts,
+			"active_host_id": r.ActiveTarget().ID,
+		})
+	})
+
+	mux.HandleFunc("POST /api/hosts", func(w http.ResponseWriter, req *http.Request) {
+		var in db.HostProfileInput
+		if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		created, err := store.CreateHostProfile(in)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "host": created})
+	})
+
+	mux.HandleFunc("PUT /api/hosts/{id}", func(w http.ResponseWriter, req *http.Request) {
+		var in db.HostProfileInput
+		if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		updated, err := store.UpdateHostProfile(req.PathValue("id"), in)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+			return
+		}
+		if updated == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Host não encontrado"})
+			return
+		}
+		if updated.IsActive {
+			r.SetActiveHost(runner.HostTarget{
+				ID:     updated.ID,
+				Name:   updated.Name,
+				Host:   updated.Host,
+				User:   updated.SSHUser,
+				Port:   updated.SSHPort,
+				WolMAC: updated.WolMAC,
+				OSHint: updated.OSHint,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "host": updated})
+	})
+
+	mux.HandleFunc("DELETE /api/hosts/{id}", func(w http.ResponseWriter, req *http.Request) {
+		deleted, err := store.DeleteHostProfile(req.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": err.Error()})
+			return
+		}
+		if !deleted {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Host não encontrado"})
+			return
+		}
+		syncActiveHostRunner(cfg, store, r)
+		hosts, _ := store.ListHostProfiles()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "hosts": hosts, "active_host_id": r.ActiveTarget().ID})
 	})
 
 	mux.Handle("/terminal/ws", newTerminalProxy(cfg.TtydWSURL))
@@ -309,6 +597,40 @@ func buildAppMux(
 		cachedAGYModels    []runner.ModelInfo
 		cachedAGYModelsExp time.Time
 	)
+
+	mux.HandleFunc("POST /api/hosts/{id}/activate", func(w http.ResponseWriter, req *http.Request) {
+		activated, err := store.ActivateHostProfile(req.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": err.Error()})
+			return
+		}
+		if activated == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Host não encontrado"})
+			return
+		}
+		r.SetActiveHost(runner.HostTarget{
+			ID:     activated.ID,
+			Name:   activated.Name,
+			Host:   activated.Host,
+			User:   activated.SSHUser,
+			Port:   activated.SSHPort,
+			WolMAC: activated.WolMAC,
+			OSHint: activated.OSHint,
+		})
+		agyModelsMu.Lock()
+		cachedAGYModels = nil
+		cachedAGYModelsExp = time.Time{}
+		agyModelsMu.Unlock()
+
+		hosts, _ := store.ListHostProfiles()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":             true,
+			"active_host":    activated,
+			"active_host_id": activated.ID,
+			"host_name":      r.HostName(req.Context()),
+			"hosts":          hosts,
+		})
+	})
 
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, req *http.Request) {
 		models := []runner.ModelInfo{}
@@ -1202,6 +1524,26 @@ func buildAppMux(
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
 	})
 
+	// --- Optional Package: Telegram Bot Webhook (Private Allowlist + Inbox/Outbox) ---
+	tgBot := botbridge.NewTelegramBot(cfg, store, r, mgr, bridge)
+	mux.HandleFunc("POST /api/bot/telegram/webhook", func(w http.ResponseWriter, req *http.Request) {
+		if enabled, _ := cfg.Mods["telegram_bot"].(bool); !enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"detail": "Telegram bot desativado"})
+			return
+		}
+		if !tgBot.VerifyWebhookSecret(req.Header.Get("X-Telegram-Bot-Api-Secret-Token")) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Secret token inválido"})
+			return
+		}
+		var upd botbridge.TelegramUpdate
+		if err := json.NewDecoder(req.Body).Decode(&upd); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": "JSON inválido"})
+			return
+		}
+		accepted, info := tgBot.HandleUpdate(req.Context(), upd)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": accepted, "info": info})
+	})
+
 	if enabled, _ := cfg.Mods["cockpit"].(bool); enabled {
 		mux.Handle("/api/cockpit/", newCockpitProxy(cfg.CockpitURL, cfg.CockpitToken))
 	}
@@ -1255,6 +1597,11 @@ func main() {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
 	sched.Start(bgCtx)
+	if enabled, _ := cfg.Mods["telegram_bot"].(bool); enabled && cfg.TelegramMode != "webhook" && cfg.TelegramBotToken != "" {
+		tgBridge := botbridge.New(cfg, store, jobMgr)
+		tgPoller := botbridge.NewTelegramBot(cfg, store, execRunner, jobMgr, tgBridge)
+		go tgPoller.StartPolling(bgCtx)
+	}
 	if enabled, _ := cfg.Mods["watchdog"].(bool); enabled {
 		go func() {
 			wd.probe(bgCtx, execRunner)
@@ -1273,7 +1620,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           buildAppMux(cfg, store, execRunner, jobMgr, wd, notifier, sched),
+		Handler:           buildProtectedHandler(cfg, store, execRunner, jobMgr, wd, notifier, sched),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

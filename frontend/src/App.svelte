@@ -12,19 +12,25 @@
   import ShareModal from "./components/ShareModal.svelte";
   import AutomationsModal from "./components/AutomationsModal.svelte";
   import SlashCommandsModal from "./components/SlashCommandsModal.svelte";
+  import AuthLockScreen from "./components/AuthLockScreen.svelte";
+  import HostManagerModal from "./components/HostManagerModal.svelte";
   import { Button } from "./lib/components/ui/button/index.js";
   import { Card } from "./lib/components/ui/card/index.js";
   import { Badge } from "./lib/components/ui/badge/index.js";
   import { Input } from "./lib/components/ui/input/index.js";
   import {
+    activateHost,
     deleteConversation,
     enableBrowserWebPush,
+    fetchAuthStatus,
     fetchFeatures,
+    fetchHosts,
     fetchModels,
     fetchOutbox,
     fetchSettings,
     fetchSlashCommands,
     fetchStatus,
+    logoutSession,
     registerGatewayServiceWorker,
     showBrowserNotification,
     triggerWol,
@@ -32,6 +38,7 @@
     type AlertEvent,
     type ChatMessage,
     type GatewaySettings,
+    type HostProfile,
     type ModelInfo,
     type OutboxFile,
     type PermissionMode,
@@ -331,6 +338,14 @@
   let slashModalOpen = $state(false);
   let slashCommands = $state<SlashCommandItem[]>([]);
   let unreadAlerts = $state(0);
+  let hostManagerOpen = $state(false);
+  let hostMenuOpen = $state(false);
+  let hosts = $state<HostProfile[]>([]);
+  let activeHostId = $state("");
+  let authEnabled = $state(false);
+  let authAuthenticated = $state(true);
+  let authWebAuthnCount = $state(0);
+  let appBootstrapped = false;
 
   // Share Snapshot Modal
   let shareOpen = $state(false);
@@ -392,6 +407,7 @@
       }
       if (st.active_os) activeOS = st.active_os;
       if (st.host_name) targetHostName = st.host_name;
+      if (st.active_host_id) activeHostId = st.active_host_id;
     } catch {
       targetOnline = false;
     }
@@ -401,6 +417,57 @@
     } catch {
       // ignore
     }
+  }
+
+  async function refreshHosts() {
+    try {
+      const hRes = await fetchHosts();
+      hosts = hRes.hosts;
+      if (hRes.active_host_id) activeHostId = hRes.active_host_id;
+    } catch {
+      // ignore
+    }
+  }
+
+  async function switchActiveHost(id: string) {
+    hostMenuOpen = false;
+    try {
+      const res = await activateHost(id);
+      hosts = res.hosts;
+      activeHostId = res.active_host_id;
+      if (res.host_name) targetHostName = res.host_name;
+      await refreshStatusAndOutbox();
+      const loadedModels = await fetchModels().catch(() => models);
+      if (loadedModels.length > 0) models = loadedModels;
+    } catch {
+      // ignore
+    }
+  }
+
+  async function refreshAuthState() {
+    try {
+      const st = await fetchAuthStatus();
+      authEnabled = st.enabled;
+      authAuthenticated = st.authenticated;
+      authWebAuthnCount = st.webauthn_count;
+      return st;
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleLockSession() {
+    await logoutSession().catch(() => {});
+    if (statusInterval) {
+      clearInterval(statusInterval);
+      statusInterval = null;
+    }
+    if (alertEventSource) {
+      alertEventSource.close();
+      alertEventSource = null;
+    }
+    appBootstrapped = false;
+    await refreshAuthState();
   }
 
   async function handleWakeOnLan() {
@@ -505,7 +572,70 @@
     deferredInstallPrompt = null;
   }
 
+  async function bootstrapApp() {
+    if (appBootstrapped) return;
+    appBootstrapped = true;
+
+    void fetchSlashCommands()
+      .then((cmds) => {
+        slashCommands = cmds;
+      })
+      .catch(() => {});
+
+    const [loadedSettings, loadedModels, loadedFeatures] = await Promise.all([
+      fetchSettings().catch(() => settings),
+      fetchModels().catch(() => models),
+      fetchFeatures().catch(() => null),
+      refreshStatusAndOutbox(),
+      refreshHosts(),
+    ]);
+
+    settings = loadedSettings;
+    if (
+      !hasStoredTheme() &&
+      (loadedSettings.theme_mode || loadedSettings.theme_palette)
+    ) {
+      const m = normalizeThemeMode(loadedSettings.theme_mode);
+      const p = normalizeThemePalette(loadedSettings.theme_palette);
+      themeMode = m;
+      themePalette = p;
+      applyTheme(m, p, true);
+    }
+
+    if (loadedModels.length > 0) models = loadedModels;
+    if (loadedFeatures?.features) {
+      features = loadedFeatures.features;
+      if (
+        loadedFeatures.mode === "standalone" ||
+        loadedFeatures.mode === "gateway" ||
+        loadedFeatures.mode === "ide-bridge"
+      ) {
+        gatewayMode = loadedFeatures.mode;
+      }
+      if (loadedFeatures.dirs?.outbox) {
+        outboxDir = loadedFeatures.dirs.outbox;
+      }
+      if (loadedFeatures.host_name) {
+        targetHostName = loadedFeatures.host_name;
+      }
+    }
+
+    defaultModel = loadedSettings.default_model || "gemini-4-hydrogen-high";
+    defaultPermission = loadedSettings.default_permission_mode || "copilot";
+
+    const convParam = new URLSearchParams(window.location.search).get("conv");
+    if (convParam) {
+      paneRefs[focusedTabId]?.loadConversation(convParam);
+      window.history.replaceState({}, "", "/");
+    }
+
+    startAlertStream();
+    if (statusInterval) clearInterval(statusInterval);
+    statusInterval = setInterval(refreshStatusAndOutbox, 15000);
+  }
+
   onMount(() => {
+    applyTheme(themeMode, themePalette, false);
     window.addEventListener("beforeinstallprompt", handleBeforeInstall);
     window.addEventListener("appinstalled", handleAppInstalled);
     void registerGatewayServiceWorker();
@@ -529,61 +659,11 @@
     window.visualViewport?.addEventListener("resize", syncViewport);
     window.visualViewport?.addEventListener("scroll", syncViewport);
 
-    void fetchSlashCommands()
-      .then((cmds) => {
-        slashCommands = cmds;
-      })
-      .catch(() => {});
-
     void (async () => {
-      const [loadedSettings, loadedModels, loadedFeatures] = await Promise.all([
-        fetchSettings().catch(() => settings),
-        fetchModels().catch(() => models),
-        fetchFeatures().catch(() => null),
-        refreshStatusAndOutbox(),
-      ]);
-
-      settings = loadedSettings;
-      if (
-        !hasStoredTheme() &&
-        (loadedSettings.theme_mode || loadedSettings.theme_palette)
-      ) {
-        const m = normalizeThemeMode(loadedSettings.theme_mode);
-        const p = normalizeThemePalette(loadedSettings.theme_palette);
-        themeMode = m;
-        themePalette = p;
-        applyTheme(m, p, true);
+      const authSt = await refreshAuthState();
+      if (!authSt || !authSt.enabled || authSt.authenticated) {
+        await bootstrapApp();
       }
-
-      if (loadedModels.length > 0) models = loadedModels;
-      if (loadedFeatures?.features) {
-        features = loadedFeatures.features;
-        if (
-          loadedFeatures.mode === "standalone" ||
-          loadedFeatures.mode === "gateway" ||
-          loadedFeatures.mode === "ide-bridge"
-        ) {
-          gatewayMode = loadedFeatures.mode;
-        }
-        if (loadedFeatures.dirs?.outbox) {
-          outboxDir = loadedFeatures.dirs.outbox;
-        }
-        if (loadedFeatures.host_name) {
-          targetHostName = loadedFeatures.host_name;
-        }
-      }
-
-      defaultModel = loadedSettings.default_model || "gemini-4-hydrogen-high";
-      defaultPermission = loadedSettings.default_permission_mode || "copilot";
-
-      const convParam = new URLSearchParams(window.location.search).get("conv");
-      if (convParam) {
-        paneRefs[focusedTabId]?.loadConversation(convParam);
-        window.history.replaceState({}, "", "/");
-      }
-
-      startAlertStream();
-      statusInterval = setInterval(refreshStatusAndOutbox, 15000);
     })();
 
     return () => {
@@ -607,6 +687,7 @@
   onkeydown={(e) => {
     if (e.key === "Escape") {
       if (themeMenuOpen) themeMenuOpen = false;
+      if (hostMenuOpen) hostMenuOpen = false;
       if (pendingDelete && !deletingChat) pendingDelete = null;
       if (automationsOpen) automationsOpen = false;
     }
@@ -632,7 +713,7 @@
         <Icon name="menu" size={19} />
       </Button>
 
-      <div class="flex items-center gap-1.5 min-w-0">
+      <div class="relative flex items-center gap-1.5 min-w-0">
         {#if anyGenerating}
           <AiSpinner size={14} class="text-accent-foreground" />
         {:else}
@@ -645,9 +726,23 @@
                 : 'bg-amber-500'}"
           ></span>
         {/if}
-        <span class="text-xs font-bold tracking-tight truncate text-foreground"
-          >{hostLabel}</span
-        >
+        {#if gatewayMode === "gateway" || hosts.length > 0}
+          <button
+            type="button"
+            onclick={() => (hostMenuOpen = !hostMenuOpen)}
+            class="flex items-center gap-1 min-w-0 px-1.5 py-0.5 rounded-lg hover:bg-secondary/80 transition-colors text-left"
+            title="Alternar ou gerenciar hosts"
+          >
+            <span class="text-xs font-bold tracking-tight truncate text-foreground"
+              >{hostLabel}</span
+            >
+            <Icon name="chevron-down" size={12} class="text-muted-foreground shrink-0" />
+          </button>
+        {:else}
+          <span class="text-xs font-bold tracking-tight truncate text-foreground"
+            >{hostLabel}</span
+          >
+        {/if}
         {#if targetOnline === true && features.dual_boot}
           <Badge variant="accent" size="xs" class="font-mono shrink-0">
             {activeOS === "windows" ? "Win" : "Linux"}
@@ -663,6 +758,55 @@
             <Icon name="power" size={11} />
             <span>Acordar</span>
           </Button>
+        {/if}
+
+        {#if hostMenuOpen}
+          <button
+            type="button"
+            aria-label="Fechar menu de hosts"
+            onclick={() => (hostMenuOpen = false)}
+            class="fixed inset-0 z-40 cursor-default"
+          ></button>
+          <div
+            transition:fly={{ y: -6, duration: 140, easing: cubicOut }}
+            class="absolute left-0 top-full mt-2 w-64 z-50 rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] shadow-2xl p-2 space-y-1.5 theme-surface"
+          >
+            <div class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Hosts Cadastrados
+            </div>
+            {#each hosts as h (h.id)}
+              <button
+                type="button"
+                onclick={() => switchActiveHost(h.id)}
+                class="w-full text-left px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition-colors {h.id === activeHostId || h.is_active
+                  ? 'bg-[var(--accent-soft)] border border-[var(--accent-border)] text-foreground'
+                  : 'hover:bg-secondary/70 text-muted-foreground'}"
+              >
+                <div class="min-w-0">
+                  <div class="font-semibold text-foreground truncate">{h.name}</div>
+                  <div class="text-[10px] font-mono text-muted-foreground truncate">
+                    {h.ssh_user}@{h.host}
+                  </div>
+                </div>
+                {#if h.id === activeHostId || h.is_active}
+                  <Icon name="check" size={14} class="text-accent-foreground shrink-0" />
+                {/if}
+              </button>
+            {/each}
+            <div class="pt-1 border-t border-border/70">
+              <button
+                type="button"
+                onclick={() => {
+                  hostMenuOpen = false;
+                  hostManagerOpen = true;
+                }}
+                class="w-full px-2.5 py-1.5 rounded-xl text-xs font-semibold text-accent-foreground hover:bg-secondary/70 flex items-center gap-1.5"
+              >
+                <Icon name="settings" size={13} />
+                <span>Gerenciar Hosts...</span>
+              </button>
+            </div>
+          </div>
         {/if}
       </div>
     </div>
@@ -1059,11 +1203,35 @@
   onOpenSlashCommands={() => (slashModalOpen = true)}
   slashCommandCount={slashCommands.length}
   onThemeChange={setTheme}
+  onLockSession={handleLockSession}
+  onAuthChanged={() => {
+    void refreshAuthState();
+  }}
   onSettingsSaved={(s) => {
     defaultPermission = s.default_permission_mode;
     defaultModel = s.default_model;
   }}
 />
+
+<HostManagerModal
+  bind:open={hostManagerOpen}
+  bind:hosts
+  bind:activeHostId
+  onActivated={() => {
+    void refreshStatusAndOutbox();
+    void refreshHosts();
+  }}
+/>
+
+{#if authEnabled && !authAuthenticated}
+  <AuthLockScreen
+    webauthnCount={authWebAuthnCount}
+    onUnlocked={() => {
+      authAuthenticated = true;
+      void bootstrapApp();
+    }}
+  />
+{/if}
 
 <TerminalModal
   bind:open={terminalOpen}

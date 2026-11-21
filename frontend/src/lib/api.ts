@@ -76,7 +76,7 @@ export interface WatchdogState {
   downtime_events: number;
 }
 
-export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; host_name?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
+export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; active_host_id?: string; host_name?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
   const res = await fetch('/api/status');
   return res.json();
 }
@@ -650,4 +650,234 @@ export async function transcribeAudio(audioBlob: Blob, filename = 'voice.webm'):
   }
   const data = (await res.json()) as { text?: string };
   return (data.text || '').trim();
+}
+
+// --- Security & PIN / Token / WebAuthn Auth ---
+
+export interface WebAuthnCredItem {
+  id: string;
+  credential_id: string;
+  label: string;
+  created_at: string;
+}
+
+export interface AuthStatus {
+  enabled: boolean;
+  authenticated: boolean;
+  has_pin: boolean;
+  has_env_token: boolean;
+  webauthn_count: number;
+  credentials?: WebAuthnCredItem[];
+}
+
+function b64urlToBytes(b64url: string): Uint8Array {
+  const pad = '='.repeat((4 - (b64url.length % 4)) % 4);
+  const b64 = (b64url + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64url(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const res = await fetch('/api/auth/status');
+  return res.json();
+}
+
+export async function loginWithSecret(secret: string): Promise<void> {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: secret, pin: secret }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'PIN ou token inválido'));
+  }
+}
+
+export async function logoutSession(): Promise<{ ok: boolean; authenticated: boolean }> {
+  const res = await fetch('/api/auth/logout', { method: 'POST' });
+  return res.json();
+}
+
+export async function saveAuthPIN(pin: string): Promise<{ ok: boolean; enabled: boolean; has_pin: boolean }> {
+  const res = await fetch('/api/auth/pin', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Erro ao salvar PIN'));
+  }
+  return res.json();
+}
+
+export async function registerWebAuthnPasskey(label = 'Dispositivo'): Promise<WebAuthnCredItem> {
+  if (!window.PublicKeyCredential) {
+    throw new Error('WebAuthn indisponível neste navegador (requer HTTPS ou localhost)');
+  }
+  const optRes = await fetch('/api/auth/webauthn/register/options', { method: 'POST' });
+  if (!optRes.ok) {
+    throw new Error(await readErrorMessage(optRes, 'Falha ao gerar desafio WebAuthn'));
+  }
+  const opts = await optRes.json();
+  const cred = (await navigator.credentials.create({
+    publicKey: {
+      challenge: b64urlToBytes(opts.challenge) as BufferSource,
+      rp: opts.rp,
+      user: {
+        id: b64urlToBytes(opts.user.id) as BufferSource,
+        name: opts.user.name,
+        displayName: opts.user.displayName,
+      },
+      pubKeyCredParams: opts.pubKeyCredParams,
+      authenticatorSelection: {
+        userVerification: 'preferred',
+      },
+      timeout: 60000,
+    },
+  })) as PublicKeyCredential | null;
+
+  if (!cred) {
+    throw new Error('Registro biométrico cancelado');
+  }
+  const resp = cred.response as AuthenticatorAttestationResponse;
+  const verRes = await fetch('/api/auth/webauthn/register/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      clientDataJSON: bytesToB64url(resp.clientDataJSON),
+      attestationObject: bytesToB64url(resp.attestationObject),
+      label,
+    }),
+  });
+  if (!verRes.ok) {
+    throw new Error(await readErrorMessage(verRes, 'Falha ao validar passkey'));
+  }
+  const data = await verRes.json();
+  return data.credential as WebAuthnCredItem;
+}
+
+export async function loginWithWebAuthn(): Promise<void> {
+  if (!window.PublicKeyCredential) {
+    throw new Error('WebAuthn indisponível neste navegador');
+  }
+  const optRes = await fetch('/api/auth/webauthn/login/options', { method: 'POST' });
+  if (!optRes.ok) {
+    throw new Error(await readErrorMessage(optRes, 'Nenhuma biometria registrada'));
+  }
+  const opts = await optRes.json();
+  const assertion = (await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(opts.challenge) as BufferSource,
+      rpId: opts.rpId,
+      allowCredentials: (opts.allowCredentials || []).map((c: { id: string; type: PublicKeyCredentialType }) => ({
+        type: c.type,
+        id: b64urlToBytes(c.id) as BufferSource,
+      })),
+      userVerification: 'preferred',
+      timeout: 60000,
+    },
+  })) as PublicKeyCredential | null;
+
+  if (!assertion) {
+    throw new Error('Autenticação biométrica cancelada');
+  }
+  const resp = assertion.response as AuthenticatorAssertionResponse;
+  const verRes = await fetch('/api/auth/webauthn/login/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: bytesToB64url(assertion.rawId),
+      clientDataJSON: bytesToB64url(resp.clientDataJSON),
+      authenticatorData: bytesToB64url(resp.authenticatorData),
+      signature: bytesToB64url(resp.signature),
+    }),
+  });
+  if (!verRes.ok) {
+    throw new Error(await readErrorMessage(verRes, 'Falha na autenticação biométrica'));
+  }
+}
+
+export async function deleteWebAuthnCredential(id: string): Promise<void> {
+  const res = await fetch(`/api/auth/webauthn/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Erro ao remover biometria'));
+  }
+}
+
+// --- Multi-PC Host Profiles ---
+
+export interface HostProfile {
+  id: string;
+  name: string;
+  host: string;
+  ssh_user: string;
+  ssh_port: string;
+  wol_mac: string;
+  os_hint: string;
+  is_active: boolean;
+  sort_order: number;
+}
+
+export interface HostProfilePayload {
+  name: string;
+  host: string;
+  ssh_user: string;
+  ssh_port?: string;
+  wol_mac?: string;
+  os_hint?: string;
+}
+
+export async function fetchHosts(): Promise<{ hosts: HostProfile[]; active_host_id: string }> {
+  const res = await fetch('/api/hosts');
+  if (!res.ok) return { hosts: [], active_host_id: '' };
+  return res.json();
+}
+
+export async function createHost(payload: HostProfilePayload): Promise<{ ok: boolean; host: HostProfile }> {
+  const res = await fetch('/api/hosts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Erro ao criar host'));
+  }
+  return res.json();
+}
+
+export async function updateHost(id: string, payload: HostProfilePayload): Promise<{ ok: boolean; host: HostProfile }> {
+  const res = await fetch(`/api/hosts/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Erro ao atualizar host'));
+  }
+  return res.json();
+}
+
+export async function deleteHost(id: string): Promise<{ ok: boolean; hosts: HostProfile[]; active_host_id: string }> {
+  const res = await fetch(`/api/hosts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Erro ao remover host'));
+  }
+  return res.json();
+}
+
+export async function activateHost(id: string): Promise<{ ok: boolean; active_host: HostProfile; active_host_id: string; host_name: string; hosts: HostProfile[] }> {
+  const res = await fetch(`/api/hosts/${encodeURIComponent(id)}/activate`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Erro ao ativar host'));
+  }
+  return res.json();
 }
