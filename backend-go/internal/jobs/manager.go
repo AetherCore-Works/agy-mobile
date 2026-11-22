@@ -34,6 +34,7 @@ type CreateRequest struct {
 	Model          *string  `json:"model"`
 	PermissionMode *string  `json:"permission_mode"`
 	AttachedFiles  []string `json:"attached_files"`
+	SlashCommand   *string  `json:"slash_command,omitempty"`
 }
 
 // JobFinishNotice describes a completed or failed background job for active alerts.
@@ -48,9 +49,12 @@ type JobFinishNotice struct {
 }
 
 type jobRunMeta struct {
-	startedAt time.Time
-	engine    string
-	model     string
+	startedAt         time.Time
+	engine            string
+	model             string
+	slashCmd          string
+	prompt            string
+	telemetryRecorded bool
 }
 
 // Manager coordinates async job execution, cancellation, and SSE broadcast signals.
@@ -145,7 +149,7 @@ func (m *Manager) RouteAutoModel(ctx context.Context, prompt string, attached []
 	return "gemini-4-hydrogen-high"
 }
 
-// buildAgentPrompt appends mobile Inbox/Outbox context to non-slash prompts so the user's prompt stays first for CLI title/preview extraction.
+// buildAgentPrompt appends learned Aegys rules and mobile Inbox/Outbox context to non-slash prompts so the user's prompt stays first for CLI title/preview extraction.
 func (m *Manager) buildAgentPrompt(userPrompt string, attachedFiles []string) string {
 	trimmed := strings.TrimSpace(userPrompt)
 	if strings.HasPrefix(trimmed, "/") && len(attachedFiles) == 0 {
@@ -153,6 +157,21 @@ func (m *Manager) buildAgentPrompt(userPrompt string, attachedFiles []string) st
 	}
 
 	var suffix strings.Builder
+	if m.store != nil {
+		if rules, err := m.store.ListEnabledAegysRules(6); err == nil && len(rules) > 0 {
+			suffix.WriteString("[Preferências e Regras Aprendidas (Aegys):")
+			totalLen := 0
+			for _, rule := range rules {
+				item := " - " + strings.TrimSpace(rule.Content)
+				if totalLen+len(item) > 700 {
+					break
+				}
+				suffix.WriteString("\n" + item)
+				totalLen += len(item)
+			}
+			suffix.WriteString("]\n")
+		}
+	}
 	if len(attachedFiles) > 0 {
 		fmt.Fprintf(
 			&suffix,
@@ -177,6 +196,88 @@ func (m *Manager) buildAgentPrompt(userPrompt string, attachedFiles []string) st
 		return ctxBlock
 	}
 	return trimmed + "\n\n" + ctxBlock
+}
+
+func extractSlashCommand(req CreateRequest, userPrompt string) string {
+	if req.SlashCommand != nil {
+		sc := strings.ToLower(strings.TrimSpace(*req.SlashCommand))
+		if sc != "" {
+			if !strings.HasPrefix(sc, "/") {
+				sc = "/" + sc
+			}
+			return strings.Fields(sc)[0]
+		}
+	}
+	trimmed := strings.TrimSpace(userPrompt)
+	if strings.HasPrefix(trimmed, "/") {
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 && len(fields[0]) > 1 && len(fields[0]) <= 34 {
+			return strings.ToLower(fields[0])
+		}
+	}
+	return ""
+}
+
+// DetectUserCorrection identifies natural-language follow-up corrections so the evolution loop learns from mistakes.
+func DetectUserCorrection(userPrompt string) bool {
+	low := strings.ToLower(strings.TrimSpace(userPrompt))
+	if low == "" || strings.HasPrefix(low, "/") || len([]rune(low)) > 260 {
+		return false
+	}
+	cues := []string{
+		"não era isso", "nao era isso",
+		"não é isso", "nao e isso",
+		"você errou", "voce errou", "errou",
+		"está errado", "esta errado", "tá errado", "ta errado",
+		"corrija", "corrigir", "tente de novo", "tenta de novo",
+		"refaça", "refaca", "fez errado", "entendeu errado",
+		"não faça assim", "nao faca assim",
+		"wrong", "that's wrong", "fix that", "try again", "not what i asked",
+	}
+	for _, cue := range cues {
+		if strings.Contains(low, cue) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) recordJobOutcome(jobID, convID, status, errMsg string, tools []string) {
+	m.mu.Lock()
+	meta, ok := m.meta[jobID]
+	if ok {
+		if meta.telemetryRecorded {
+			m.mu.Unlock()
+			return
+		}
+		meta.telemetryRecorded = true
+		m.meta[jobID] = meta
+	}
+	m.mu.Unlock()
+
+	if !ok {
+		return
+	}
+	var durationMs int64
+	if !meta.startedAt.IsZero() {
+		durationMs = time.Since(meta.startedAt).Milliseconds()
+	}
+	kind := "job_ok"
+	if status == "error" {
+		kind = "job_error"
+	}
+	_ = m.store.RecordTelemetryEvent(db.TelemetryEvent{
+		Kind:          kind,
+		ConvID:        convID,
+		JobID:         jobID,
+		SlashCommand:  meta.slashCmd,
+		PromptPreview: meta.prompt,
+		Model:         meta.model,
+		Engine:        meta.engine,
+		ExecutedTools: tools,
+		ErrorMessage:  errMsg,
+		DurationMs:    durationMs,
+	})
 }
 
 func (m *Manager) snapshotOutbox(ctx context.Context) map[string]float64 {
@@ -255,6 +356,36 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 		return nil, err
 	}
 
+	slashCmd := extractSlashCommand(req, userPrompt)
+	if slashCmd != "" {
+		cid := ""
+		if convID != nil {
+			cid = *convID
+		}
+		_ = m.store.RecordTelemetryEvent(db.TelemetryEvent{
+			Kind:          "slash_used",
+			ConvID:        cid,
+			JobID:         jobID,
+			SlashCommand:  slashCmd,
+			PromptPreview: userPrompt,
+			Model:         selectedModel,
+			Engine:        engine,
+		})
+	}
+	if convID != nil && DetectUserCorrection(userPrompt) {
+		if prevJob, err := m.store.FindPreviousJobInConversation(*convID, jobID); err == nil && prevJob != nil {
+			_ = m.store.RecordTelemetryEvent(db.TelemetryEvent{
+				Kind:           "user_correction",
+				ConvID:         *convID,
+				JobID:          prevJob.ID,
+				Model:          prevJob.Model,
+				Engine:         prevJob.Engine,
+				PromptPreview:  prevJob.Prompt,
+				CorrectionNote: userPrompt,
+			})
+		}
+	}
+
 	jobCtx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
 	m.cancels[jobID] = cancel
@@ -265,6 +396,8 @@ func (m *Manager) StartJob(ctx context.Context, req CreateRequest) (map[string]a
 		startedAt: time.Now(),
 		engine:    engine,
 		model:     selectedModel,
+		slashCmd:  slashCmd,
+		prompt:    userPrompt,
 	}
 	m.mu.Unlock()
 
@@ -398,6 +531,7 @@ func (m *Manager) runOllamaJob(ctx context.Context, jobID, convID, userPrompt, a
 	if preview == "" {
 		preview = "Tarefa finalizada."
 	}
+	m.recordJobOutcome(jobID, convID, "completed", "", nil)
 	m.notifyJobResult(jobID, convID, "completed", "AGY (Local) Concluído", preview, "default")
 }
 
@@ -600,17 +734,20 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 		_ = m.store.UpdateJob(jobID, strPtrOrNil(currentConvID), &doneStatus, nil)
 	}
 
+	m.recordJobOutcome(jobID, currentConvID, "completed", "", executedTools)
 	m.notifyJobResult(jobID, currentConvID, "completed", "AGY Concluído", fmt.Sprintf("Sessão finalizada (%s).", selectedModel), "default")
 }
 
 func (m *Manager) failJob(jobID, convID string, ctx context.Context, msg string) {
-	if errors.Is(ctx.Err(), context.Canceled) {
+	canceled := errors.Is(ctx.Err(), context.Canceled)
+	if canceled {
 		msg = "Execução cancelada pelo usuário."
 	}
 	errStatus := "error"
 	_ = m.store.UpdateJob(jobID, strPtrOrNil(convID), &errStatus, &msg)
 	m.emitEvent(jobID, "error", map[string]any{"type": "error", "error": msg})
-	if !errors.Is(ctx.Err(), context.Canceled) {
+	if !canceled {
+		m.recordJobOutcome(jobID, convID, "error", msg, nil)
 		m.notifyJobResult(jobID, convID, "error", "AGY Erro", msg, "high")
 	}
 }

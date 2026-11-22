@@ -18,9 +18,11 @@
     fetchConversation,
     fetchFeatures,
     fetchWatchdog,
+    submitFeedback,
     transcribeAudio,
     uploadFile,
     type ChatMessage,
+    type EvolutionProposal,
     type ModelInfo,
     type OutboxFile,
     type PermissionMode,
@@ -50,10 +52,14 @@
     slashCommands = [],
     outboxFiles = [],
     outboxLoaded = false,
+    pendingProposals = [],
     onOpenShare,
     onRequestDelete,
     onOpenTerminal,
     onOpenSlashManager,
+    onOpenEvolution,
+    onApproveProposal,
+    onRejectProposal,
     onOutboxRefresh,
     onOpenMediaPreview,
     onFocus,
@@ -75,6 +81,7 @@
     slashCommands?: SlashCommandItem[];
     outboxFiles?: OutboxFile[];
     outboxLoaded?: boolean;
+    pendingProposals?: EvolutionProposal[];
     onOpenShare: (
       title: string,
       singleMarkdown: string,
@@ -83,6 +90,9 @@
     onRequestDelete?: (convId: string, title: string) => void;
     onOpenTerminal: () => void;
     onOpenSlashManager?: () => void;
+    onOpenEvolution?: () => void;
+    onApproveProposal?: (id: string) => Promise<void>;
+    onRejectProposal?: (id: string) => Promise<void>;
     onOutboxRefresh?: () => Promise<void> | void;
     onOpenMediaPreview?: (target: PreviewTarget) => void;
     onFocus: () => void;
@@ -130,6 +140,19 @@
   let liveElapsed = $state(0);
   let jobProgress = $state(0);
   let copiedMsgIdx = $state<number | null>(null);
+  let correctingMsgIdx = $state<number | null>(null);
+  let correctionDraft = $state("");
+  let submittingFeedbackIdx = $state<number | null>(null);
+  let evolutionDockDismissed = $state(false);
+  let busyProposalId = $state<string | null>(null);
+  let prevPendingCount = 0;
+
+  $effect(() => {
+    if (pendingProposals.length > prevPendingCount) {
+      evolutionDockDismissed = false;
+    }
+    prevPendingCount = pendingProposals.length;
+  });
 
   let streamAbort: AbortController | null = null;
   let elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -173,6 +196,7 @@
     { cmd: "/compact", desc: "Compactar histórico da sessão" },
     { cmd: "/diff", desc: "Exibir git status e diff atual" },
     { cmd: "/mem", desc: "Consultar memória persistente (ai-memory)" },
+    { cmd: "/evolve", desc: "Relatório de Evolução do Aegys (1 clique)" },
     { cmd: "/plan", desc: "Ativar modo Planejamento (Leitura)" },
     { cmd: "/clear", desc: "Limpar e iniciar nova conversa" },
     { cmd: "/status", desc: "Status do Watchdog & recursos" },
@@ -321,7 +345,10 @@
       messages.length === 0 ||
       messages[messages.length - 1].role !== "agent"
     ) {
-      messages = [...messages, { role: "agent", content: "" }];
+      messages = [...messages, { role: "agent", content: "", job_id: jobId }];
+    } else if (!messages[messages.length - 1].job_id) {
+      messages[messages.length - 1].job_id = jobId;
+      messages = messages;
     }
     const agentIdx = messages.length - 1;
 
@@ -487,7 +514,7 @@
   async function submitPromptInternal(
     promptText: string,
     filesToSend: string[] = [],
-    opts?: { modelOverride?: string; displayText?: string },
+    opts?: { modelOverride?: string; displayText?: string; slashCommand?: string },
   ) {
     const text = promptText.trim();
     if ((!text && filesToSend.length === 0) || isGenerating) return;
@@ -518,7 +545,13 @@
         model: effectiveModel,
         permission_mode: permissionMode,
         attached_files: filesToSend.length > 0 ? filesToSend : undefined,
+        slash_command: opts?.slashCommand,
       });
+
+      if (messages.length > 0 && messages[messages.length - 1].role === "agent") {
+        messages[messages.length - 1].job_id = job.job_id;
+        messages = messages;
+      }
 
       activeJobId = job.job_id;
       activeJobLastSeq = 0;
@@ -571,6 +604,7 @@
         await submitPromptInternal(expanded, filesToSend, {
           modelOverride: customCmd.model || undefined,
           displayText: text,
+          slashCommand: customCmd.command,
         });
         return;
       }
@@ -616,6 +650,7 @@
         displayText: inlineArgs
           ? `${customCmd.command} ${inlineArgs}`
           : customCmd.command,
+        slashCommand: customCmd.command,
       });
       return;
     }
@@ -625,6 +660,10 @@
     if (textareaEl) textareaEl.style.height = "auto";
     if (normalized === "/clear") {
       newConversation();
+      return;
+    }
+    if (normalized === "/evolve") {
+      onOpenEvolution?.();
       return;
     }
     if (normalized === "/plan") {
@@ -644,6 +683,8 @@
     if (normalized === "/diff") {
       await submitPromptInternal(
         "Execute git status -s e git diff no workspace atual e exiba a saída dentro de um bloco ```diff.",
+        [],
+        { displayText: "/diff", slashCommand: "/diff" },
       );
       return;
     }
@@ -934,6 +975,44 @@
     copyMsgTimer = setTimeout(() => {
       if (copiedMsgIdx === idx) copiedMsgIdx = null;
     }, 1600);
+  }
+
+  async function sendAgentFeedback(idx: number, rating: "up" | "down", correction = "") {
+    const target = messages[idx];
+    if (!target || target.role !== "agent") return;
+    submittingFeedbackIdx = idx;
+    try {
+      await submitFeedback({
+        job_id: target.job_id,
+        conversation_id: conversationId,
+        rating,
+        correction: correction.trim() || undefined,
+        message_snippet: target.content.slice(0, 240),
+      });
+      messages[idx].feedback = rating;
+      messages = messages;
+      if (correctingMsgIdx === idx) {
+        correctingMsgIdx = null;
+        correctionDraft = "";
+      }
+    } catch {
+      // ignore non-blocking feedback error
+    } finally {
+      submittingFeedbackIdx = null;
+    }
+  }
+
+  async function handleQuickProposalDecision(id: string, action: "approve" | "reject") {
+    busyProposalId = id;
+    try {
+      if (action === "approve") {
+        await onApproveProposal?.(id);
+      } else {
+        await onRejectProposal?.(id);
+      }
+    } finally {
+      busyProposalId = null;
+    }
   }
 
   async function handleDocumentClick(e: MouseEvent) {
@@ -1352,32 +1431,105 @@
                       </div>
                     {:else if msg.content.trim()}
                       <div
-                        class="mt-4 pt-2.5 border-t border-border/70 flex flex-wrap items-center justify-end gap-1.5"
+                        class="mt-4 pt-2.5 border-t border-border/70 flex flex-wrap items-center justify-between gap-1.5"
                       >
-                        <Button
-                          variant="outline"
-                          size="xs"
-                          onclick={() => copyAgentMessage(i, msg.content)}
-                          title="Copiar resposta em Markdown"
-                        >
-                          <Icon name={copiedMsgIdx === i ? "check" : "clipboard"} size={12} />
-                          <span>{copiedMsgIdx === i ? "Copiado" : "Copiar"}</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="xs"
-                          onclick={() =>
-                            onOpenShare(
-                              sessionTitle || "Snapshot AGY",
-                              msg.content,
-                              messages,
-                            )}
-                          title="Compartilhar / Exportar snapshot"
-                        >
-                          <Icon name="share" size={12} />
-                          <span>Compartilhar</span>
-                        </Button>
+                        <div class="flex flex-wrap items-center gap-1">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            disabled={submittingFeedbackIdx === i}
+                            onclick={() => sendAgentFeedback(i, "up")}
+                            class={msg.feedback === "up"
+                              ? "border-emerald-500/45 bg-emerald-500/15 text-emerald-500"
+                              : ""}
+                            title="Resposta útil (registra na telemetria)"
+                          >
+                            <Icon name="thumbs-up" size={12} />
+                            <span>{msg.feedback === "up" ? "Útil" : ""}</span>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            disabled={submittingFeedbackIdx === i}
+                            onclick={() => {
+                              if (correctingMsgIdx === i) {
+                                correctingMsgIdx = null;
+                              } else {
+                                correctingMsgIdx = i;
+                                correctionDraft = "";
+                              }
+                            }}
+                            class={msg.feedback === "down" || correctingMsgIdx === i
+                              ? "border-amber-500/45 bg-amber-500/15 text-amber-400"
+                              : ""}
+                            title="Registrar falha ou correção para o Aegys aprender"
+                          >
+                            <Icon name="thumbs-down" size={12} />
+                            <span>{msg.feedback === "down" ? "Ajuste salvo" : "Corrigir"}</span>
+                          </Button>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onclick={() => copyAgentMessage(i, msg.content)}
+                            title="Copiar resposta em Markdown"
+                          >
+                            <Icon name={copiedMsgIdx === i ? "check" : "clipboard"} size={12} />
+                            <span>{copiedMsgIdx === i ? "Copiado" : "Copiar"}</span>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onclick={() =>
+                              onOpenShare(
+                                sessionTitle || "Snapshot AGY",
+                                msg.content,
+                                messages,
+                              )}
+                            title="Compartilhar / Exportar snapshot"
+                          >
+                            <Icon name="share" size={12} />
+                            <span>Compartilhar</span>
+                          </Button>
+                        </div>
                       </div>
+
+                      {#if correctingMsgIdx === i}
+                        <form
+                          onsubmit={(ev) => {
+                            ev.preventDefault();
+                            void sendAgentFeedback(i, "down", correctionDraft);
+                          }}
+                          class="mt-2 pt-2 border-t border-border/60 flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5"
+                        >
+                          <input
+                            type="text"
+                            bind:value={correctionDraft}
+                            placeholder="O que o Aegys errou ou deve melhorar?"
+                            class="flex-1 min-w-0 h-8 rounded-lg border border-input bg-muted px-2.5 text-xs text-foreground focus:outline-none focus:border-ring"
+                          />
+                          <div class="flex items-center justify-end gap-1 shrink-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              onclick={() => (correctingMsgIdx = null)}
+                            >
+                              Cancelar
+                            </Button>
+                            <Button
+                              type="submit"
+                              variant="default"
+                              size="xs"
+                              disabled={submittingFeedbackIdx === i}
+                            >
+                              Registrar
+                            </Button>
+                          </div>
+                        </form>
+                      {/if}
                     {/if}
                   {/if}
                 </Card>
@@ -1422,6 +1574,85 @@
         ? 'w-full'
         : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} space-y-2"
     >
+      <!-- Aegys Evolution 1-Click Approval Card -->
+      {#if pendingProposals.length > 0 && !evolutionDockDismissed}
+        {@const topProp = pendingProposals[0]}
+        <div transition:fly={{ y: 10, duration: 170, easing: cubicOut }}>
+          <Card class="p-2.5 sm:p-3 bg-accent/35 border-[var(--accent-border)] space-y-2">
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <Icon name="trending-up" size={14} class="text-accent-foreground shrink-0" />
+                <span class="text-xs font-bold text-foreground truncate">
+                  Relatório de Evolução ({pendingProposals.length})
+                </span>
+                <Badge variant="accent" size="xs" class="shrink-0">
+                  {topProp.kind === "fast_path_slash" ? "Fast-Path /" : "Melhoria"}
+                </Badge>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                {#if onOpenEvolution}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onclick={() => onOpenEvolution?.()}
+                    class="h-6 px-2 text-[11px] text-accent-foreground"
+                  >
+                    Ver todas
+                  </Button>
+                {/if}
+                <button
+                  type="button"
+                  onclick={() => (evolutionDockDismissed = true)}
+                  class="text-muted-foreground hover:text-foreground p-0.5"
+                  aria-label="Ocultar sugestão de evolução"
+                >
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            </div>
+
+            <div class="text-xs font-semibold text-foreground break-words">
+              {topProp.title}
+            </div>
+            {#if topProp.rationale}
+              <p class="text-[11px] text-muted-foreground line-clamp-2 break-words">
+                {topProp.rationale}
+              </p>
+            {/if}
+
+            <div class="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
+              {#if topProp.kind === "fast_path_slash" && topProp.payload?.command}
+                <Kbd class="text-accent-foreground border-[var(--accent-border)] bg-accent/60 px-1.5">
+                  {topProp.payload.command}
+                </Kbd>
+              {:else}
+                <span></span>
+              {/if}
+              <div class="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={busyProposalId === topProp.id}
+                  onclick={() => handleQuickProposalDecision(topProp.id, "reject")}
+                >
+                  Dispensar
+                </Button>
+                <Button
+                  variant="default"
+                  size="xs"
+                  disabled={busyProposalId === topProp.id}
+                  onclick={() => handleQuickProposalDecision(topProp.id, "approve")}
+                  class="bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500"
+                >
+                  <Icon name="check" size={12} />
+                  <span>{busyProposalId === topProp.id ? "Aplicando..." : "Aprovar em 1 clique"}</span>
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      {/if}
+
       <!-- Interactive HITL Approval Card -->
       {#if approvalNeeded}
         <div transition:fly={{ y: 12, duration: 180, easing: cubicOut }}>

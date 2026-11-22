@@ -33,9 +33,10 @@ type Scheduler struct {
 	jobMgr   *jobs.Manager
 	notifier *Notifier
 
-	nowFn        func() time.Time
-	dockerListFn func(ctx context.Context) (bool, []DockerState)
-	diskFn       func(path string) (DiskSpaceInfo, error)
+	nowFn           func() time.Time
+	dockerListFn    func(ctx context.Context) (bool, []DockerState)
+	diskFn          func(path string) (DiskSpaceInfo, error)
+	OnEvolutionTick func(ctx context.Context)
 
 	mu              sync.Mutex
 	triggeredMinute map[string]string
@@ -147,6 +148,47 @@ func (s *Scheduler) TickCron(ctx context.Context) {
 		}
 		go s.executeAutomation(ctx, a, sched)
 	}
+
+	s.tickEvolution(ctx, now, minuteKey)
+}
+
+func (s *Scheduler) tickEvolution(ctx context.Context, now time.Time, minuteKey string) {
+	if s.OnEvolutionTick == nil {
+		return
+	}
+	if enabled, _ := s.cfg.Mods["evolution"].(bool); !enabled {
+		return
+	}
+	cronExpr := strings.TrimSpace(s.cfg.EvolutionCron)
+	if cronExpr == "" {
+		cronExpr = "0 3 * * *"
+	}
+	sched, err := ParseCron(cronExpr)
+	if err != nil || !sched.Matches(now) {
+		return
+	}
+
+	const evoKey = "__aegys_evolution__"
+	s.mu.Lock()
+	alreadyMin := s.triggeredMinute[evoKey] == minuteKey
+	isRunning := s.runningCron[evoKey]
+	if !alreadyMin && !isRunning {
+		s.triggeredMinute[evoKey] = minuteKey
+		s.runningCron[evoKey] = true
+	}
+	s.mu.Unlock()
+
+	if alreadyMin || isRunning {
+		return
+	}
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			delete(s.runningCron, evoKey)
+			s.mu.Unlock()
+		}()
+		s.OnEvolutionTick(ctx)
+	}()
 }
 
 // RunAutomationNow executes a saved automation immediately on demand.

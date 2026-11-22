@@ -135,6 +135,7 @@ O `Dockerfile` padrão faz *multi-stage build* em Go (`golang:bookworm` -> `debi
 Variáveis de ambiente reconhecidas pelo `agy-gateway` (podem ser passadas via ambiente ou arquivo `.env` no mesmo diretório):
 - **Whisper (`POST /api/transcribe`):** defina `ENABLE_WHISPER=true` e `WHISPER_URL=http://127.0.0.1:8000` (apontando para um servidor compatível com `/v1/audio/transcriptions`, como `faster-whisper-server` / `speaches`).
 - **Ollama Local:** `ENABLE_OLLAMA=true` (padrão) e `OLLAMA_URL=http://127.0.0.1:11434`.
+- **Loop de Evolução Contínua (`AGYGATEWAY-23`):** `ENABLE_EVOLUTION=true` (padrão), `EVOLUTION_CRON="0 3 * * *"`, `OLLAMA_WORKER_BIN=ollama-worker`, `EVOLUTION_FASTPATH_MIN_HITS=3` e `AI_MEMORY_SERVER_URL=http://192.0.2.10:49374/mcp` (MCP `ai-memory` opcional para `memory_consolidate` / `memory_auto_improve`).
 - **Notificações Push (`ntfy`):** `ENABLE_NTFY=true` e `NTFY_TOPIC=<seu-topico>`.
 - **Wake-on-LAN / Terminal / Watchdog:** `ENABLE_WOL`, `WOL_MAC`, `ENABLE_TERMINAL`, `ENABLE_WATCHDOG`, `ENABLE_TELEMETRY`.
 - **Cockpit (`packages/cockpit`, opcional fora do Core):** painel vivo com gráficos SVG (VRAM, GPU Temp, CPU, RAM), top processos, controle Docker (`start/stop/logs`) e ações de energia protegidas. Rode `packages/cockpit/cmd/agy-cockpit` na workstation e habilite no Gateway com `ENABLE_COCKPIT=true` + `COCKPIT_URL=http://127.0.0.1:8099` (ou `--profile cockpit` no Docker Compose). Veja [packages/cockpit/README.md](../packages/cockpit/README.md).
