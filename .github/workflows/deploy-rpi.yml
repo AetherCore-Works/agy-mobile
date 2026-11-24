@@ -1,0 +1,31 @@
+name: Deploy RPi (Self-Hosted)
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-rpi
+  cancel-in-progress: false
+
+jobs:
+  deploy-rpi:
+    name: Deploy to Raspberry Pi
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && vars.ENABLE_RPI_AUTO_DEPLOY == 'true') }}
+    runs-on: [self-hosted, linux, rpi]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Run deploy-rpi.sh
+        run: |
+          chmod +x ./scripts/deploy-rpi.sh
+          ./scripts/deploy-rpi.sh
+      - name: Verify gateway health
+        run: curl -sf http://127.0.0.1:8088/api/health

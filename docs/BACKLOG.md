@@ -47,9 +47,9 @@ Itens aprovados para planejamento e execução em ciclos futuros:
   - Carregar `TerminalModal` (e o motor `xterm.js`), highlighters de código e modais secundários sob demanda via `import()`, reduzindo o chunk principal (~696 kB) e acelerando o carregamento em 4G/5G.
 - [ ] **Timeline Visual de Tool Calls & Diffs no Chat:**
   - Adicionar um acordeão discreto e colapsável nas respostas do agente exibindo as ferramentas executadas, comandos rodados e arquivos modificados sem poluir o texto principal.
-- [ ] **CI & CD Completo (GitHub Actions + Self-Hosted Runner no Homelab):**
-  - **CI:** rodar `go vet` + `go test -race` (`backend-go` e `packages/cockpit`), `npx tsc --noEmit && npm run build`, checagem de higiene/segredos e matriz cross-OS em todo PR/push.
-  - **CD:** releases por tag (`v*`) com binários/imagem multi-arch e deploy automático no RPi via **Self-Hosted Runner** na LAN executando `scripts/deploy-rpi.sh` + healthcheck (`/api/health`) com rollback/alerta em falha.
+- [x] **CI & CD Completo (GitHub Actions + Self-Hosted Runner no Homelab):**
+  - **CI:** `.github/workflows/ci.yml` (`go vet` + `go test -race` em `backend-go` e `packages/cockpit`, `npx tsc --noEmit && npm run build`, Gitleaks e matriz cross-OS em todo PR/push).
+  - **CD:** `.github/workflows/release.yml` (releases por tag `v*` com binários multi-OS + `SHA256SUMS.txt`) e `.github/workflows/deploy-rpi.yml` (deploy no RPi via Self-Hosted Runner na LAN com `scripts/deploy-rpi.sh` + `/api/health`; ativável com `ENABLE_RPI_AUTO_DEPLOY=true`).
 
 ---
 
