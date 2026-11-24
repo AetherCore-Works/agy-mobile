@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -18,21 +19,26 @@ type AppDirs struct {
 
 // GatewaySettings mirrors Python GatewaySettings 1:1 for API and mod parity.
 type GatewaySettings struct {
-	Mode                string
-	Port                string
-	TargetHost          string
-	TargetUser          string
-	TargetSSHPort       string
-	WinTargetHost       string
-	WinTargetUser       string
-	WinSSHPort          string
-	WinAGYBin           string
-	WinInboxDir         string
-	WinOutboxDir        string
-	WolMAC              string
-	SSHKey              string
-	OllamaURL           string
-	TtydWSURL           string
+	Mode                   string
+	Port                   string
+	TargetHost             string
+	TargetUser             string
+	TargetSSHPort          string
+	WinTargetHost          string
+	WinTargetUser          string
+	WinSSHPort             string
+	WinAGYBin              string
+	WinInboxDir            string
+	WinOutboxDir           string
+	WolMAC                 string
+	SSHKey                 string
+	OllamaURL              string
+	OllamaWorkerBin        string
+	AIMemoryURL            string
+	EvolutionCron          string
+	EvolutionModel         string
+	EvolutionFastPathHits  int
+	TtydWSURL              string
 	WhisperURL             string
 	CockpitURL             string
 	CockpitToken           string
@@ -75,6 +81,18 @@ func boolEnv(name string, fallback bool) bool {
 	default:
 		return false
 	}
+}
+
+func intEnv(name string, fallback int) int {
+	val, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(val) == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(val))
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func fileExists(path string) bool {
@@ -209,6 +227,14 @@ func Load() GatewaySettings {
 			bridgeTimeout = parsedT
 		}
 	}
+	aiMemoryURL := strings.TrimRight(envOr("AI_MEMORY_SERVER_URL", ""), "/")
+	evolutionCron := envOr("EVOLUTION_CRON", "0 3 * * *")
+	evolutionModel := envOr("EVOLUTION_MODEL", "")
+	ollamaWorkerBin := envOr("OLLAMA_WORKER_BIN", "ollama-worker")
+	evolutionFastPathHits := intEnv("EVOLUTION_FASTPATH_MIN_HITS", 3)
+	if evolutionFastPathHits < 2 {
+		evolutionFastPathHits = 2
+	}
 
 	cockpitEnabled := boolEnv("ENABLE_COCKPIT", false) || cockpitURL != ""
 	if cockpitURL == "" {
@@ -244,11 +270,12 @@ func Load() GatewaySettings {
 		"ollama":       boolEnv("ENABLE_OLLAMA", true),
 		"inbox_outbox": true,
 		"fts5_search":  true,
-		"ai_memory":    boolEnv("ENABLE_AI_MEMORY", false) || envOr("AI_MEMORY_SERVER_URL", "") != "",
+		"ai_memory":    boolEnv("ENABLE_AI_MEMORY", false) || aiMemoryURL != "",
 		"ntfy":         boolEnv("ENABLE_NTFY", false) || envOr("NTFY_TOPIC", "") != "",
 		"whisper":      boolEnv("ENABLE_WHISPER", false) || whisperURL != "",
 		"cockpit":      cockpitEnabled,
 		"automations":  true,
+		"evolution":    boolEnv("ENABLE_EVOLUTION", true),
 		"web_push":     true,
 		"ide_bridge":   isIDEBridge,
 		"telemetry":    boolEnv("ENABLE_TELEMETRY", isGateway),
@@ -258,7 +285,7 @@ func Load() GatewaySettings {
 		"discord_bot":  boolEnv("ENABLE_DISCORD_BOT", false),
 		"telegram_bot": boolEnv("ENABLE_TELEGRAM_BOT", telegramToken != "" && len(telegramAllowed) > 0),
 		"slash_commands": []string{
-			"/compact", "/usage", "/diff", "/mem", "/plan", "/clear", "/status",
+			"/compact", "/usage", "/diff", "/mem", "/plan", "/clear", "/status", "/evolve",
 		},
 	}
 
@@ -277,6 +304,11 @@ func Load() GatewaySettings {
 		WolMAC:                 wolMAC,
 		SSHKey:                 envOr("SSH_KEY", "/root/.ssh/id_ed25519"),
 		OllamaURL:              envOr("OLLAMA_URL", "http://127.0.0.1:11434"),
+		OllamaWorkerBin:        ollamaWorkerBin,
+		AIMemoryURL:            aiMemoryURL,
+		EvolutionCron:          evolutionCron,
+		EvolutionModel:         evolutionModel,
+		EvolutionFastPathHits:  evolutionFastPathHits,
 		TtydWSURL:              envOr("TTYD_WS_URL", "ws://127.0.0.1:7681/terminal/ws"),
 		WhisperURL:             whisperURL,
 		CockpitURL:             cockpitURL,

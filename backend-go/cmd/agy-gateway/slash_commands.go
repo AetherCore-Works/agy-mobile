@@ -21,6 +21,7 @@ var reservedBuiltinSlash = map[string]bool{
 	"/plan":    true,
 	"/clear":   true,
 	"/status":  true,
+	"/evolve":  true,
 }
 
 type slashCommandUpsertRequest struct {
@@ -66,7 +67,7 @@ func registerSlashCommandRoutes(mux *http.ServeMux, store *db.GatewayDB) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"commands": items,
-			"reserved": []string{"/usage", "/compact", "/diff", "/mem", "/plan", "/clear", "/status"},
+			"reserved": []string{"/usage", "/compact", "/diff", "/mem", "/plan", "/clear", "/status", "/evolve"},
 		})
 	})
 

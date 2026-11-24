@@ -31,6 +31,8 @@ export interface ChatMessage {
   role: 'user' | 'agent';
   content: string;
   outbox_files?: string[];
+  job_id?: string;
+  feedback?: 'up' | 'down' | null;
 }
 
 export interface SlashCommandItem {
@@ -76,7 +78,7 @@ export interface WatchdogState {
   downtime_events: number;
 }
 
-export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; active_host_id?: string; host_name?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number }> {
+export async function fetchStatus(): Promise<{ online: boolean; mode?: string; active_os?: string; active_host_id?: string; host_name?: string; target_host: string; target_user: string; wol_mac?: string; unread_alerts?: number; pending_evolution?: number }> {
   const res = await fetch('/api/status');
   return res.json();
 }
@@ -274,6 +276,7 @@ export async function createJob(payload: {
   model: string;
   permission_mode: PermissionMode;
   attached_files?: string[];
+  slash_command?: string;
 }): Promise<{ job_id: string; conversation_id: string | null; engine: string; model?: string; status: string }> {
   const res = await fetch('/api/jobs', {
     method: 'POST',
@@ -880,4 +883,144 @@ export async function activateHost(id: string): Promise<{ ok: boolean; active_ho
     throw new Error(await readErrorMessage(res, 'Erro ao ativar host'));
   }
   return res.json();
+}
+
+export interface CommandUsageStat {
+  name: string;
+  count: number;
+  error_count?: number;
+  last_used_at?: string;
+}
+
+export interface RepeatedPromptStat {
+  prompt_norm: string;
+  prompt_preview: string;
+  preferred_model?: string;
+  count: number;
+  last_used_at: string;
+}
+
+export interface TelemetryStats {
+  total_jobs_ok: number;
+  total_job_errors: number;
+  total_feedback_up: number;
+  total_feedback_down: number;
+  total_corrections: number;
+  unconsolidated_events: number;
+  top_commands: CommandUsageStat[];
+  top_models: CommandUsageStat[];
+  repeated_prompts: RepeatedPromptStat[];
+}
+
+export interface EvolutionProposal {
+  id: string;
+  cycle_id: string;
+  kind: 'fast_path_slash' | 'prompt_rule' | 'preference';
+  fingerprint: string;
+  title: string;
+  rationale: string;
+  payload: Record<string, any>;
+  status: 'pending' | 'approved' | 'rejected';
+  applied_ref?: string;
+  created_at: string;
+  decided_at?: string;
+}
+
+export interface EvolutionCycle {
+  id: string;
+  trigger: string;
+  status: 'completed' | 'partial' | 'skipped' | 'error' | 'running';
+  events_processed: number;
+  proposals_created: number;
+  analyzer_backend: string;
+  ai_memory_status: string;
+  summary: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
+export interface AegysRule {
+  id: string;
+  kind: 'prompt_rule' | 'preference';
+  title: string;
+  content: string;
+  enabled: boolean;
+  source_proposal_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvolutionReport {
+  enabled: boolean;
+  cron_expr: string;
+  ollama_enabled: boolean;
+  ai_memory_enabled: boolean;
+  pending_count: number;
+  stats: TelemetryStats;
+  proposals: EvolutionProposal[];
+  rules: AegysRule[];
+  cycles: EvolutionCycle[];
+}
+
+export async function submitFeedback(payload: {
+  job_id?: string;
+  conversation_id?: string | null;
+  rating: 'up' | 'down';
+  correction?: string;
+  message_snippet?: string;
+}): Promise<{ ok: boolean; kind: string }> {
+  const res = await fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...payload,
+      conversation_id: payload.conversation_id || '',
+    }),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao enviar feedback'));
+  return res.json();
+}
+
+export async function fetchEvolutionReport(): Promise<EvolutionReport> {
+  const res = await fetch('/api/evolution/report');
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao carregar relatório de evolução'));
+  return res.json();
+}
+
+export async function runEvolutionCycle(force = true): Promise<{ ok: boolean; outcome: { skipped: boolean; reason?: string; cycle?: EvolutionCycle; proposals: EvolutionProposal[] }; report?: EvolutionReport }> {
+  const res = await fetch('/api/evolution/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao executar consolidação'));
+  return res.json();
+}
+
+export async function approveEvolutionProposal(id: string): Promise<{ ok: boolean; proposal: EvolutionProposal; slash_command?: SlashCommandItem; rule?: AegysRule; pending_count: number }> {
+  const res = await fetch(`/api/evolution/proposals/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao aprovar melhoria'));
+  return res.json();
+}
+
+export async function rejectEvolutionProposal(id: string): Promise<{ ok: boolean; proposal: EvolutionProposal; pending_count: number }> {
+  const res = await fetch(`/api/evolution/proposals/${encodeURIComponent(id)}/reject`, { method: 'POST' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao dispensar melhoria'));
+  return res.json();
+}
+
+export async function updateAegysRule(id: string, enabled: boolean): Promise<{ ok: boolean; rule: AegysRule }> {
+  const res = await fetch(`/api/evolution/rules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao atualizar regra'));
+  return res.json();
+}
+
+export async function deleteAegysRule(id: string): Promise<void> {
+  const res = await fetch(`/api/evolution/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await readErrorMessage(res, 'Falha ao remover regra'));
 }

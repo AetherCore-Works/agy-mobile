@@ -40,7 +40,10 @@ export type IconName =
   | 'link'
   | 'bell'
   | 'play'
-  | 'lock';
+  | 'lock'
+  | 'thumbs-up'
+  | 'thumbs-down'
+  | 'trending-up';
 
 export interface IconShape {
   tag: 'path' | 'circle' | 'rect' | 'line' | 'polyline' | 'polygon';
@@ -236,6 +239,16 @@ const ICONS: Record<IconName, IconShape[]> = {
   lock: [
     { tag: 'rect', attrs: { x: 3, y: 11, width: 18, height: 11, rx: 2, ry: 2 } },
     { tag: 'path', attrs: { d: 'M7 11V7a5 5 0 0 1 10 0v4' } },
+  ],
+  'thumbs-up': [
+    { tag: 'path', attrs: { d: 'M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3' } },
+  ],
+  'thumbs-down': [
+    { tag: 'path', attrs: { d: 'M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17' } },
+  ],
+  'trending-up': [
+    { tag: 'polyline', attrs: { points: '23 6 13.5 15.5 8.5 10.5 1 18' } },
+    { tag: 'polyline', attrs: { points: '17 6 23 6 23 12' } },
   ],
 };
 

@@ -318,6 +318,75 @@ func (g *GatewayDB) initSchema() error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS telemetry_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind TEXT NOT NULL,
+		conv_id TEXT NOT NULL DEFAULT '',
+		job_id TEXT NOT NULL DEFAULT '',
+		slash_command TEXT NOT NULL DEFAULT '',
+		prompt_norm TEXT NOT NULL DEFAULT '',
+		prompt_preview TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		engine TEXT NOT NULL DEFAULT '',
+		executed_tools_json TEXT NOT NULL DEFAULT '[]',
+		error_message TEXT NOT NULL DEFAULT '',
+		correction_note TEXT NOT NULL DEFAULT '',
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		cycle_id TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_telemetry_cycle
+		ON telemetry_events(cycle_id, id);
+
+	CREATE INDEX IF NOT EXISTS idx_telemetry_kind_created
+		ON telemetry_events(kind, created_at);
+
+	CREATE TABLE IF NOT EXISTS evolution_cycles (
+		id TEXT PRIMARY KEY,
+		trigger TEXT NOT NULL DEFAULT 'cron',
+		status TEXT NOT NULL DEFAULT 'completed',
+		events_processed INTEGER NOT NULL DEFAULT 0,
+		proposals_created INTEGER NOT NULL DEFAULT 0,
+		analyzer_backend TEXT NOT NULL DEFAULT '',
+		ai_memory_status TEXT NOT NULL DEFAULT '',
+		summary TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		started_at TEXT NOT NULL,
+		finished_at TEXT NOT NULL DEFAULT ''
+	);
+
+	CREATE TABLE IF NOT EXISTS evolution_proposals (
+		id TEXT PRIMARY KEY,
+		cycle_id TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		fingerprint TEXT NOT NULL,
+		title TEXT NOT NULL,
+		rationale TEXT NOT NULL DEFAULT '',
+		payload_json TEXT NOT NULL DEFAULT '{}',
+		status TEXT NOT NULL DEFAULT 'pending',
+		applied_ref TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		decided_at TEXT NOT NULL DEFAULT ''
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_evolution_proposals_status
+		ON evolution_proposals(status, created_at DESC);
+
+	CREATE INDEX IF NOT EXISTS idx_evolution_proposals_fp
+		ON evolution_proposals(fingerprint, status);
+
+	CREATE TABLE IF NOT EXISTS aegys_rules (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL DEFAULT 'prompt_rule',
+		title TEXT NOT NULL,
+		content TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		source_proposal_id TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	);
+
 	CREATE TABLE IF NOT EXISTS webauthn_credentials (
 		id TEXT PRIMARY KEY,
 		credential_id TEXT NOT NULL UNIQUE,

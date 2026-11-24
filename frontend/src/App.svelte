@@ -14,15 +14,18 @@
   import SlashCommandsModal from "./components/SlashCommandsModal.svelte";
   import AuthLockScreen from "./components/AuthLockScreen.svelte";
   import HostManagerModal from "./components/HostManagerModal.svelte";
+  import EvolutionModal from "./components/EvolutionModal.svelte";
   import { Button } from "./lib/components/ui/button/index.js";
   import { Card } from "./lib/components/ui/card/index.js";
   import { Badge } from "./lib/components/ui/badge/index.js";
   import { Input } from "./lib/components/ui/input/index.js";
   import {
     activateHost,
+    approveEvolutionProposal,
     deleteConversation,
     enableBrowserWebPush,
     fetchAuthStatus,
+    fetchEvolutionReport,
     fetchFeatures,
     fetchHosts,
     fetchModels,
@@ -32,11 +35,13 @@
     fetchStatus,
     logoutSession,
     registerGatewayServiceWorker,
+    rejectEvolutionProposal,
     showBrowserNotification,
     triggerWol,
     updateSettings,
     type AlertEvent,
     type ChatMessage,
+    type EvolutionReport,
     type GatewaySettings,
     type HostProfile,
     type ModelInfo,
@@ -335,6 +340,12 @@
   let outboxLoaded = $state(false);
   let mediaPreviewTarget = $state<PreviewTarget | null>(null);
   let automationsOpen = $state(false);
+  let evolutionOpen = $state(false);
+  let evolutionReport = $state<EvolutionReport | null>(null);
+  let pendingEvolutionProposals = $derived(
+    (evolutionReport?.proposals ?? []).filter((p) => p.status === "pending"),
+  );
+  let pendingEvolutionCount = $derived(pendingEvolutionProposals.length);
   let slashModalOpen = $state(false);
   let slashCommands = $state<SlashCommandItem[]>([]);
   let unreadAlerts = $state(0);
@@ -396,6 +407,27 @@
     } finally {
       deletingChat = false;
     }
+  }
+
+  async function refreshEvolutionReport() {
+    try {
+      evolutionReport = await fetchEvolutionReport();
+    } catch {
+      // ignore if disabled or unavailable
+    }
+  }
+
+  async function handleApproveEvolutionProposal(id: string) {
+    const res = await approveEvolutionProposal(id);
+    if (res.slash_command) {
+      slashCommands = await fetchSlashCommands().catch(() => slashCommands);
+    }
+    await refreshEvolutionReport();
+  }
+
+  async function handleRejectEvolutionProposal(id: string) {
+    await rejectEvolutionProposal(id);
+    await refreshEvolutionReport();
   }
 
   async function refreshStatusAndOutbox() {
@@ -552,6 +584,9 @@
       try {
         const ev = JSON.parse((msg as MessageEvent).data) as AlertEvent;
         unreadAlerts += 1;
+        if (ev.source === "evolution") {
+          void refreshEvolutionReport();
+        }
         showLiveAlertToast(ev);
         showBrowserNotification(ev, (convId) => {
           paneRefs[focusedTabId]?.loadConversation(convId, ev.title);
@@ -659,6 +694,14 @@
     window.visualViewport?.addEventListener("resize", syncViewport);
     window.visualViewport?.addEventListener("scroll", syncViewport);
 
+    void fetchSlashCommands()
+      .then((cmds) => {
+        slashCommands = cmds;
+      })
+      .catch(() => {});
+
+    void refreshEvolutionReport();
+
     void (async () => {
       const authSt = await refreshAuthState();
       if (!authSt || !authSt.enabled || authSt.authenticated) {
@@ -690,6 +733,7 @@
       if (hostMenuOpen) hostMenuOpen = false;
       if (pendingDelete && !deletingChat) pendingDelete = null;
       if (automationsOpen) automationsOpen = false;
+      if (evolutionOpen) evolutionOpen = false;
     }
   }}
 />
@@ -1163,10 +1207,14 @@
         {slashCommands}
         {outboxFiles}
         {outboxLoaded}
+        pendingProposals={pendingEvolutionProposals}
         onOpenShare={openShareModal}
         onRequestDelete={requestDeleteConversation}
         onOpenTerminal={() => (terminalOpen = true)}
         onOpenSlashManager={() => (slashModalOpen = true)}
+        onOpenEvolution={() => (evolutionOpen = true)}
+        onApproveProposal={handleApproveEvolutionProposal}
+        onRejectProposal={handleRejectEvolutionProposal}
         onOutboxRefresh={refreshStatusAndOutbox}
         onOpenMediaPreview={(target) => (mediaPreviewTarget = target)}
         onFocus={() => {
@@ -1200,6 +1248,8 @@
   }}
   onConversationDeleted={handleConversationDeleted}
   onOpenAutomations={() => (automationsOpen = true)}
+  onOpenEvolution={() => (evolutionOpen = true)}
+  {pendingEvolutionCount}
   onOpenSlashCommands={() => (slashModalOpen = true)}
   slashCommandCount={slashCommands.length}
   onThemeChange={setTheme}
@@ -1265,6 +1315,13 @@
   onUnreadChange={(n) => {
     unreadAlerts = n;
   }}
+/>
+<EvolutionModal
+  bind:open={evolutionOpen}
+  bind:report={evolutionReport}
+  onApproveProposal={handleApproveEvolutionProposal}
+  onRejectProposal={handleRejectEvolutionProposal}
+  onRefreshReport={refreshEvolutionReport}
 />
 
 {#if pendingDelete}
@@ -1396,6 +1453,18 @@
             class="px-0 h-auto text-[11px] font-semibold"
           >
             Abrir sessão
+          </Button>
+        {:else if liveAlertToast.source === "evolution"}
+          <Button
+            variant="link"
+            size="xs"
+            onclick={() => {
+              liveAlertToast = null;
+              evolutionOpen = true;
+            }}
+            class="px-0 h-auto text-[11px] font-semibold"
+          >
+            Abrir relatório
           </Button>
         {:else}
           <Button

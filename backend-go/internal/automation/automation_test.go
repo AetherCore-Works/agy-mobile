@@ -354,3 +354,51 @@ func TestSchedulerHardwareDockerWatchersAndCronCheck(t *testing.T) {
 		t.Fatalf("expected 1 alert per source (with GPU/Disk cooldown), got %+v (unread=%d)", sources, unread)
 	}
 }
+
+func TestSchedulerEvolutionOffPeakCronTrigger(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, err := db.Open(filepath.Join(tmpDir, "gateway.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	cfg := config.GatewaySettings{
+		Mode:          "standalone",
+		EvolutionCron: "0 3 * * *",
+		Dirs:          config.AppDirs{DataDir: tmpDir},
+		Mods:          map[string]any{"evolution": true},
+	}
+	notifier := NewNotifier(store)
+	sched := NewScheduler(cfg, store, nil, nil, notifier)
+
+	triggered := make(chan struct{}, 4)
+	sched.OnEvolutionTick = func(_ context.Context) {
+		triggered <- struct{}{}
+	}
+
+	// Non-matching time (14:20) does not fire evolution
+	sched.nowFn = func() time.Time { return time.Date(2026, 11, 21, 14, 20, 0, 0, time.UTC) }
+	sched.TickCron(context.Background())
+	select {
+	case <-triggered:
+		t.Fatalf("did not expect off-peak evolution at 14:20")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	// Matching off-peak time (03:00) fires once per minute even if TickCron polls every 20s
+	sched.nowFn = func() time.Time { return time.Date(2026, 11, 21, 3, 0, 10, 0, time.UTC) }
+	sched.TickCron(context.Background())
+	sched.TickCron(context.Background())
+
+	select {
+	case <-triggered:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected OnEvolutionTick at 03:00")
+	}
+	select {
+	case <-triggered:
+		t.Fatalf("did not expect duplicate OnEvolutionTick within the same minute")
+	case <-time.After(40 * time.Millisecond):
+	}
+}
