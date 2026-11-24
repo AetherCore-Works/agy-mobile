@@ -131,6 +131,7 @@ func (m *Manager) runIDEBridgeJob(ctx context.Context, jobID string, convID *str
 			})
 			doneStatus := "completed"
 			_ = m.store.UpdateJob(jobID, &cid, &doneStatus, nil)
+			m.recordJobOutcome(jobID, cid, "completed", "", []string{"ide_bridge"})
 			m.notifyJobResult(jobID, cid, "completed", "AGY (IDE Bridge) Concluído", text, "default")
 			return
 		}

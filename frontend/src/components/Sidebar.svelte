@@ -44,6 +44,8 @@
     onNewConversation,
     onConversationDeleted,
     onOpenAutomations,
+    onOpenEvolution,
+    pendingEvolutionCount = 0,
     onOpenSlashCommands,
     slashCommandCount = 0,
     onSettingsSaved,
@@ -63,6 +65,8 @@
     onNewConversation: () => void;
     onConversationDeleted?: (id: string) => void;
     onOpenAutomations?: () => void;
+    onOpenEvolution?: () => void;
+    pendingEvolutionCount?: number;
     onOpenSlashCommands?: () => void;
     slashCommandCount?: number;
     onSettingsSaved: (s: GatewaySettings) => void;
@@ -833,6 +837,30 @@
             {:else}
               <Icon name="chevron-down" size={14} class="-rotate-90" />
             {/if}
+          </button>
+        {/if}
+
+        {#if onOpenEvolution}
+          <button
+            type="button"
+            onclick={() => {
+              open = false;
+              onOpenEvolution?.();
+            }}
+            class="w-full p-2.5 rounded-xl bg-[var(--bg-input)] hover:border-[var(--border-strong)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-semibold flex items-center justify-between gap-2 transition-all active:scale-[0.98]"
+          >
+            <div class="flex items-center gap-2">
+              <Icon name="trending-up" size={15} class="text-[var(--accent-fg)]" />
+              <span>Evolução Aegys & Telemetria</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              {#if pendingEvolutionCount > 0}
+                <Badge variant="emerald" size="xs" class="font-mono">
+                  {pendingEvolutionCount}
+                </Badge>
+              {/if}
+              <Icon name="chevron-down" size={14} class="-rotate-90 text-[var(--text-faint)]" />
+            </div>
           </button>
         {/if}
 

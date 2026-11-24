@@ -18,9 +18,11 @@
     fetchConversation,
     fetchFeatures,
     fetchWatchdog,
+    submitFeedback,
     transcribeAudio,
     uploadFile,
     type ChatMessage,
+    type EvolutionProposal,
     type ModelInfo,
     type OutboxFile,
     type PermissionMode,
@@ -50,10 +52,14 @@
     slashCommands = [],
     outboxFiles = [],
     outboxLoaded = false,
+    pendingProposals = [],
     onOpenShare,
     onRequestDelete,
     onOpenTerminal,
     onOpenSlashManager,
+    onOpenEvolution,
+    onApproveProposal,
+    onRejectProposal,
     onOutboxRefresh,
     onOpenMediaPreview,
     onFocus,
@@ -75,6 +81,7 @@
     slashCommands?: SlashCommandItem[];
     outboxFiles?: OutboxFile[];
     outboxLoaded?: boolean;
+    pendingProposals?: EvolutionProposal[];
     onOpenShare: (
       title: string,
       singleMarkdown: string,
@@ -83,6 +90,9 @@
     onRequestDelete?: (convId: string, title: string) => void;
     onOpenTerminal: () => void;
     onOpenSlashManager?: () => void;
+    onOpenEvolution?: () => void;
+    onApproveProposal?: (id: string) => Promise<void>;
+    onRejectProposal?: (id: string) => Promise<void>;
     onOutboxRefresh?: () => Promise<void> | void;
     onOpenMediaPreview?: (target: PreviewTarget) => void;
     onFocus: () => void;
@@ -117,9 +127,18 @@
   );
   let sessionTitle = $state("");
   let messages = $state<ChatMessage[]>([]);
+  type AttachedFileItem = {
+    name: string;
+    path: string;
+    previewUrl?: string;
+    isImage?: boolean;
+  };
   let userInput = $state("");
-  let attachedFiles = $state<{ name: string; path: string }[]>([]);
+  let attachedFiles = $state<AttachedFileItem[]>([]);
   let uploading = $state(false);
+  let dragOverComposer = $state(false);
+  let attachError = $state("");
+  let attachErrorTimer: ReturnType<typeof setTimeout> | undefined;
 
   let isGenerating = $state(false);
   let activeJobId = $state<string | null>(localStorage.getItem(jobStorageKey));
@@ -130,6 +149,19 @@
   let liveElapsed = $state(0);
   let jobProgress = $state(0);
   let copiedMsgIdx = $state<number | null>(null);
+  let correctingMsgIdx = $state<number | null>(null);
+  let correctionDraft = $state("");
+  let submittingFeedbackIdx = $state<number | null>(null);
+  let evolutionDockDismissed = $state(false);
+  let busyProposalId = $state<string | null>(null);
+  let prevPendingCount = 0;
+
+  $effect(() => {
+    if (pendingProposals.length > prevPendingCount) {
+      evolutionDockDismissed = false;
+    }
+    prevPendingCount = pendingProposals.length;
+  });
 
   let streamAbort: AbortController | null = null;
   let elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -173,6 +205,7 @@
     { cmd: "/compact", desc: "Compactar histórico da sessão" },
     { cmd: "/diff", desc: "Exibir git status e diff atual" },
     { cmd: "/mem", desc: "Consultar memória persistente (ai-memory)" },
+    { cmd: "/evolve", desc: "Relatório de Evolução do Aegys (1 clique)" },
     { cmd: "/plan", desc: "Ativar modo Planejamento (Leitura)" },
     { cmd: "/clear", desc: "Limpar e iniciar nova conversa" },
     { cmd: "/status", desc: "Status do Watchdog & recursos" },
@@ -321,7 +354,10 @@
       messages.length === 0 ||
       messages[messages.length - 1].role !== "agent"
     ) {
-      messages = [...messages, { role: "agent", content: "" }];
+      messages = [...messages, { role: "agent", content: "", job_id: jobId }];
+    } else if (!messages[messages.length - 1].job_id) {
+      messages[messages.length - 1].job_id = jobId;
+      messages = messages;
     }
     const agentIdx = messages.length - 1;
 
@@ -487,7 +523,7 @@
   async function submitPromptInternal(
     promptText: string,
     filesToSend: string[] = [],
-    opts?: { modelOverride?: string; displayText?: string },
+    opts?: { modelOverride?: string; displayText?: string; slashCommand?: string },
   ) {
     const text = promptText.trim();
     if ((!text && filesToSend.length === 0) || isGenerating) return;
@@ -518,7 +554,13 @@
         model: effectiveModel,
         permission_mode: permissionMode,
         attached_files: filesToSend.length > 0 ? filesToSend : undefined,
+        slash_command: opts?.slashCommand,
       });
+
+      if (messages.length > 0 && messages[messages.length - 1].role === "agent") {
+        messages[messages.length - 1].job_id = job.job_id;
+        messages = messages;
+      }
 
       activeJobId = job.job_id;
       activeJobLastSeq = 0;
@@ -555,7 +597,7 @@
 
     slashMenuOpen = false;
     userInput = "";
-    attachedFiles = [];
+    clearAttachedFiles();
     if (textareaEl) textareaEl.style.height = "auto";
 
     if (text.startsWith("/")) {
@@ -571,6 +613,7 @@
         await submitPromptInternal(expanded, filesToSend, {
           modelOverride: customCmd.model || undefined,
           displayText: text,
+          slashCommand: customCmd.command,
         });
         return;
       }
@@ -616,6 +659,7 @@
         displayText: inlineArgs
           ? `${customCmd.command} ${inlineArgs}`
           : customCmd.command,
+        slashCommand: customCmd.command,
       });
       return;
     }
@@ -625,6 +669,10 @@
     if (textareaEl) textareaEl.style.height = "auto";
     if (normalized === "/clear") {
       newConversation();
+      return;
+    }
+    if (normalized === "/evolve") {
+      onOpenEvolution?.();
       return;
     }
     if (normalized === "/plan") {
@@ -644,6 +692,8 @@
     if (normalized === "/diff") {
       await submitPromptInternal(
         "Execute git status -s e git diff no workspace atual e exiba a saída dentro de um bloco ```diff.",
+        [],
+        { displayText: "/diff", slashCommand: "/diff" },
       );
       return;
     }
@@ -733,22 +783,170 @@
     };
   }
 
-  async function handleFilesSelected(e: Event) {
-    const input = e.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
+  const IMAGE_EXT_BY_MIME: Record<string, string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+    "image/svg+xml": "svg",
+    "image/avif": "avif",
+  };
+
+  function flashAttachError(msg: string) {
+    attachError = msg;
+    if (attachErrorTimer) clearTimeout(attachErrorTimer);
+    attachErrorTimer = setTimeout(() => {
+      attachError = "";
+    }, 4500);
+  }
+
+  function revokePreviewUrl(item: AttachedFileItem) {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+  }
+
+  function removeAttachedFile(idx: number) {
+    const item = attachedFiles[idx];
+    if (item) revokePreviewUrl(item);
+    attachedFiles = attachedFiles.filter((_, k) => k !== idx);
+  }
+
+  function clearAttachedFiles() {
+    for (const item of attachedFiles) {
+      revokePreviewUrl(item);
+    }
+    attachedFiles = [];
+  }
+
+  function normalizeClipboardImageFile(file: File, index: number): File {
+    const trimmedName = file.name?.trim() ?? "";
+    if (trimmedName && /\.[a-z0-9]{2,5}$/i.test(trimmedName)) {
+      return file;
+    }
+    const mime = file.type.toLowerCase();
+    const ext =
+      IMAGE_EXT_BY_MIME[mime] ||
+      mime.split("/")[1]?.split("+")[0]?.replace(/[^a-z0-9]/gi, "") ||
+      "png";
+    const filename = trimmedName
+      ? `${trimmedName}.${ext}`
+      : `clipboard-${Date.now()}-${index + 1}.${ext}`;
+    return new File([file], filename, {
+      type: file.type || `image/${ext}`,
+      lastModified: file.lastModified || Date.now(),
+    });
+  }
+
+  function extractClipboardImageFiles(dt: DataTransfer | null): File[] {
+    if (!dt) return [];
+    const fromItems: File[] = [];
+    if (dt.items) {
+      for (const item of Array.from(dt.items)) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) {
+            fromItems.push(normalizeClipboardImageFile(f, fromItems.length));
+          }
+        }
+      }
+    }
+    if (fromItems.length > 0) return fromItems;
+
+    const fromFiles: File[] = [];
+    if (dt.files) {
+      for (const f of Array.from(dt.files)) {
+        if (f.type.startsWith("image/")) {
+          fromFiles.push(normalizeClipboardImageFile(f, fromFiles.length));
+        }
+      }
+    }
+    return fromFiles;
+  }
+
+  async function uploadAttachedFiles(files: File[]) {
+    if (files.length === 0) return;
+    attachError = "";
     uploading = true;
+    const errors: string[] = [];
     try {
-      for (const file of Array.from(input.files)) {
-        const res = await uploadFile(file);
-        attachedFiles = [
-          ...attachedFiles,
-          { name: res.filename, path: res.path },
-        ];
+      for (const file of files) {
+        const isImage = file.type.startsWith("image/");
+        const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+        try {
+          const res = await uploadFile(file);
+          attachedFiles = [
+            ...attachedFiles,
+            { name: res.filename, path: res.path, previewUrl, isImage },
+          ];
+        } catch (err) {
+          if (previewUrl) URL.revokeObjectURL(previewUrl);
+          const reason =
+            err instanceof Error ? err.message : "falha no upload";
+          errors.push(`${file.name}: ${reason}`);
+        }
       }
     } finally {
       uploading = false;
+    }
+    if (errors.length > 0) {
+      flashAttachError(errors.join("; "));
+    }
+  }
+
+  async function handleFilesSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+    try {
+      await uploadAttachedFiles(Array.from(input.files));
+    } finally {
       input.value = "";
     }
+  }
+
+  async function handleComposerPaste(e: ClipboardEvent) {
+    const dt = e.clipboardData;
+    const imageFiles = extractClipboardImageFiles(dt);
+    if (imageFiles.length === 0) return;
+    const plainText = dt?.getData("text/plain")?.trim() ?? "";
+    if (!plainText) {
+      e.preventDefault();
+    }
+    await uploadAttachedFiles(imageFiles);
+  }
+
+  async function handleDocumentPaste(e: ClipboardEvent) {
+    if (visibilityMode !== "active" || !isFocused) return;
+    const target = e.target as HTMLElement | null;
+    if (target === textareaEl) return;
+    if (target?.closest("input, textarea, select, [contenteditable='true']")) {
+      return;
+    }
+    const imageFiles = extractClipboardImageFiles(e.clipboardData);
+    if (imageFiles.length === 0) return;
+    e.preventDefault();
+    await uploadAttachedFiles(imageFiles);
+  }
+
+  function handleComposerDragOver(e: DragEvent) {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    dragOverComposer = true;
+  }
+
+  function handleComposerDragLeave(e: DragEvent) {
+    const current = e.currentTarget as HTMLElement | null;
+    const related = e.relatedTarget as Node | null;
+    if (current && related && current.contains(related)) return;
+    dragOverComposer = false;
+  }
+
+  async function handleComposerDrop(e: DragEvent) {
+    dragOverComposer = false;
+    const files = e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : [];
+    if (files.length === 0) return;
+    e.preventDefault();
+    await uploadAttachedFiles(files);
   }
 
   function flashVoiceNotice(msg: string) {
@@ -936,6 +1134,44 @@
     }, 1600);
   }
 
+  async function sendAgentFeedback(idx: number, rating: "up" | "down", correction = "") {
+    const target = messages[idx];
+    if (!target || target.role !== "agent") return;
+    submittingFeedbackIdx = idx;
+    try {
+      await submitFeedback({
+        job_id: target.job_id,
+        conversation_id: conversationId,
+        rating,
+        correction: correction.trim() || undefined,
+        message_snippet: target.content.slice(0, 240),
+      });
+      messages[idx].feedback = rating;
+      messages = messages;
+      if (correctingMsgIdx === idx) {
+        correctingMsgIdx = null;
+        correctionDraft = "";
+      }
+    } catch {
+      // ignore non-blocking feedback error
+    } finally {
+      submittingFeedbackIdx = null;
+    }
+  }
+
+  async function handleQuickProposalDecision(id: string, action: "approve" | "reject") {
+    busyProposalId = id;
+    try {
+      if (action === "approve") {
+        await onApproveProposal?.(id);
+      } else {
+        await onRejectProposal?.(id);
+      }
+    } finally {
+      busyProposalId = null;
+    }
+  }
+
   async function handleDocumentClick(e: MouseEvent) {
     const target = e.target as HTMLElement | null;
     if (!target || !chatContainer?.contains(target)) return;
@@ -1049,6 +1285,8 @@
     if (finishTimer) clearTimeout(finishTimer);
     if (copyMsgTimer) clearTimeout(copyMsgTimer);
     if (voiceNoticeTimer) clearTimeout(voiceNoticeTimer);
+    if (attachErrorTimer) clearTimeout(attachErrorTimer);
+    clearAttachedFiles();
     try {
       recognition?.abort?.();
     } catch {
@@ -1069,6 +1307,7 @@
 
 <svelte:document
   onclick={handleDocumentClick}
+  onpaste={handleDocumentPaste}
   onpointerdown={(e) => {
     const target = e.target as HTMLElement | null;
     if (target && paneEl?.contains(target)) onFocus();
@@ -1352,32 +1591,105 @@
                       </div>
                     {:else if msg.content.trim()}
                       <div
-                        class="mt-4 pt-2.5 border-t border-border/70 flex flex-wrap items-center justify-end gap-1.5"
+                        class="mt-4 pt-2.5 border-t border-border/70 flex flex-wrap items-center justify-between gap-1.5"
                       >
-                        <Button
-                          variant="outline"
-                          size="xs"
-                          onclick={() => copyAgentMessage(i, msg.content)}
-                          title="Copiar resposta em Markdown"
-                        >
-                          <Icon name={copiedMsgIdx === i ? "check" : "clipboard"} size={12} />
-                          <span>{copiedMsgIdx === i ? "Copiado" : "Copiar"}</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="xs"
-                          onclick={() =>
-                            onOpenShare(
-                              sessionTitle || "Snapshot AGY",
-                              msg.content,
-                              messages,
-                            )}
-                          title="Compartilhar / Exportar snapshot"
-                        >
-                          <Icon name="share" size={12} />
-                          <span>Compartilhar</span>
-                        </Button>
+                        <div class="flex flex-wrap items-center gap-1">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            disabled={submittingFeedbackIdx === i}
+                            onclick={() => sendAgentFeedback(i, "up")}
+                            class={msg.feedback === "up"
+                              ? "border-emerald-500/45 bg-emerald-500/15 text-emerald-500"
+                              : ""}
+                            title="Resposta útil (registra na telemetria)"
+                          >
+                            <Icon name="thumbs-up" size={12} />
+                            <span>{msg.feedback === "up" ? "Útil" : ""}</span>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            disabled={submittingFeedbackIdx === i}
+                            onclick={() => {
+                              if (correctingMsgIdx === i) {
+                                correctingMsgIdx = null;
+                              } else {
+                                correctingMsgIdx = i;
+                                correctionDraft = "";
+                              }
+                            }}
+                            class={msg.feedback === "down" || correctingMsgIdx === i
+                              ? "border-amber-500/45 bg-amber-500/15 text-amber-400"
+                              : ""}
+                            title="Registrar falha ou correção para o Aegys aprender"
+                          >
+                            <Icon name="thumbs-down" size={12} />
+                            <span>{msg.feedback === "down" ? "Ajuste salvo" : "Corrigir"}</span>
+                          </Button>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onclick={() => copyAgentMessage(i, msg.content)}
+                            title="Copiar resposta em Markdown"
+                          >
+                            <Icon name={copiedMsgIdx === i ? "check" : "clipboard"} size={12} />
+                            <span>{copiedMsgIdx === i ? "Copiado" : "Copiar"}</span>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onclick={() =>
+                              onOpenShare(
+                                sessionTitle || "Snapshot AGY",
+                                msg.content,
+                                messages,
+                              )}
+                            title="Compartilhar / Exportar snapshot"
+                          >
+                            <Icon name="share" size={12} />
+                            <span>Compartilhar</span>
+                          </Button>
+                        </div>
                       </div>
+
+                      {#if correctingMsgIdx === i}
+                        <form
+                          onsubmit={(ev) => {
+                            ev.preventDefault();
+                            void sendAgentFeedback(i, "down", correctionDraft);
+                          }}
+                          class="mt-2 pt-2 border-t border-border/60 flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5"
+                        >
+                          <input
+                            type="text"
+                            bind:value={correctionDraft}
+                            placeholder="O que o Aegys errou ou deve melhorar?"
+                            class="flex-1 min-w-0 h-8 rounded-lg border border-input bg-muted px-2.5 text-xs text-foreground focus:outline-none focus:border-ring"
+                          />
+                          <div class="flex items-center justify-end gap-1 shrink-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              onclick={() => (correctingMsgIdx = null)}
+                            >
+                              Cancelar
+                            </Button>
+                            <Button
+                              type="submit"
+                              variant="default"
+                              size="xs"
+                              disabled={submittingFeedbackIdx === i}
+                            >
+                              Registrar
+                            </Button>
+                          </div>
+                        </form>
+                      {/if}
                     {/if}
                   {/if}
                 </Card>
@@ -1422,6 +1734,85 @@
         ? 'w-full'
         : 'max-w-3xl lg:max-w-[820px] mx-auto w-full'} space-y-2"
     >
+      <!-- Aegys Evolution 1-Click Approval Card -->
+      {#if pendingProposals.length > 0 && !evolutionDockDismissed}
+        {@const topProp = pendingProposals[0]}
+        <div transition:fly={{ y: 10, duration: 170, easing: cubicOut }}>
+          <Card class="p-2.5 sm:p-3 bg-accent/35 border-[var(--accent-border)] space-y-2">
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <Icon name="trending-up" size={14} class="text-accent-foreground shrink-0" />
+                <span class="text-xs font-bold text-foreground truncate">
+                  Relatório de Evolução ({pendingProposals.length})
+                </span>
+                <Badge variant="accent" size="xs" class="shrink-0">
+                  {topProp.kind === "fast_path_slash" ? "Fast-Path /" : "Melhoria"}
+                </Badge>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                {#if onOpenEvolution}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onclick={() => onOpenEvolution?.()}
+                    class="h-6 px-2 text-[11px] text-accent-foreground"
+                  >
+                    Ver todas
+                  </Button>
+                {/if}
+                <button
+                  type="button"
+                  onclick={() => (evolutionDockDismissed = true)}
+                  class="text-muted-foreground hover:text-foreground p-0.5"
+                  aria-label="Ocultar sugestão de evolução"
+                >
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            </div>
+
+            <div class="text-xs font-semibold text-foreground break-words">
+              {topProp.title}
+            </div>
+            {#if topProp.rationale}
+              <p class="text-[11px] text-muted-foreground line-clamp-2 break-words">
+                {topProp.rationale}
+              </p>
+            {/if}
+
+            <div class="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
+              {#if topProp.kind === "fast_path_slash" && topProp.payload?.command}
+                <Kbd class="text-accent-foreground border-[var(--accent-border)] bg-accent/60 px-1.5">
+                  {topProp.payload.command}
+                </Kbd>
+              {:else}
+                <span></span>
+              {/if}
+              <div class="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={busyProposalId === topProp.id}
+                  onclick={() => handleQuickProposalDecision(topProp.id, "reject")}
+                >
+                  Dispensar
+                </Button>
+                <Button
+                  variant="default"
+                  size="xs"
+                  disabled={busyProposalId === topProp.id}
+                  onclick={() => handleQuickProposalDecision(topProp.id, "approve")}
+                  class="bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500"
+                >
+                  <Icon name="check" size={12} />
+                  <span>{busyProposalId === topProp.id ? "Aplicando..." : "Aprovar em 1 clique"}</span>
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      {/if}
+
       <!-- Interactive HITL Approval Card -->
       {#if approvalNeeded}
         <div transition:fly={{ y: 12, duration: 180, easing: cubicOut }}>
@@ -1528,7 +1919,17 @@
 
       <!-- Composer Card -->
       <footer>
-        <Card variant="mixed" class="overflow-hidden shadow-lg">
+        <Card
+          variant="mixed"
+          class={`overflow-hidden shadow-lg transition-colors ${
+            dragOverComposer
+              ? "ring-2 ring-primary/70 border-primary/60 bg-primary/5"
+              : ""
+          }`}
+          ondragover={handleComposerDragOver}
+          ondragleave={handleComposerDragLeave}
+          ondrop={handleComposerDrop}
+        >
           {#if isGenerating && liveStatus}
             <div
               transition:fly={{ y: 6, duration: 150, easing: cubicOut }}
@@ -1676,24 +2077,59 @@
               </div>
             {/if}
 
+            {#if attachError}
+              <div
+                class="flex items-center justify-between gap-2 rounded-lg border border-rose-500/35 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-300"
+              >
+                <span class="truncate">{attachError}</span>
+                <button
+                  type="button"
+                  onclick={() => (attachError = "")}
+                  aria-label="Fechar erro de anexo"
+                  class="shrink-0 rounded p-0.5 text-rose-300/80 hover:text-rose-200 transition-colors"
+                >
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            {/if}
+
             <!-- Attached File Chips -->
             {#if attachedFiles.length > 0}
               <div class="flex flex-wrap gap-1.5">
                 {#each attachedFiles as f, idx}
-                  <Badge variant="accent" size="sm" class="gap-1.5 pr-1">
-                    <Icon name="file" size={11} />
-                    <span class="max-w-[130px] truncate">{f.name}</span>
-                    <button
-                      type="button"
-                      onclick={() =>
-                        (attachedFiles = attachedFiles.filter(
-                          (_, k) => k !== idx,
-                        ))}
-                      class="rounded-full p-0.5 text-muted-foreground hover:text-rose-400 transition-colors"
+                  {#if f.isImage && f.previewUrl}
+                    <div
+                      class="group relative flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/10 p-1 pr-2 text-xs text-foreground max-w-[200px]"
                     >
-                      <Icon name="close" size={10} />
-                    </button>
-                  </Badge>
+                      <img
+                        src={f.previewUrl}
+                        alt={f.name}
+                        class="h-9 w-9 shrink-0 rounded object-cover border border-border/60 bg-black/20"
+                      />
+                      <span class="min-w-0 flex-1 truncate">{f.name}</span>
+                      <button
+                        type="button"
+                        onclick={() => removeAttachedFile(idx)}
+                        aria-label="Remover imagem"
+                        class="shrink-0 rounded-full p-0.5 text-muted-foreground hover:text-rose-400 transition-colors"
+                      >
+                        <Icon name="close" size={11} />
+                      </button>
+                    </div>
+                  {:else}
+                    <Badge variant="accent" size="sm" class="gap-1.5 pr-1">
+                      <Icon name="file" size={11} />
+                      <span class="max-w-[130px] truncate">{f.name}</span>
+                      <button
+                        type="button"
+                        onclick={() => removeAttachedFile(idx)}
+                        aria-label="Remover anexo"
+                        class="rounded-full p-0.5 text-muted-foreground hover:text-rose-400 transition-colors"
+                      >
+                        <Icon name="close" size={10} />
+                      </button>
+                    </Badge>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -1707,8 +2143,9 @@
                 placeholder={uploading
                   ? "Enviando arquivo..."
                   : gatewayMode === "standalone"
-                    ? "Digite uma instrução..."
-                    : `Instrução para ${hostLabel}...`}
+                    ? "Digite uma instrução ou cole uma imagem (Ctrl+V)..."
+                    : `Instrução para ${hostLabel} (Ctrl+V cola imagem)...`}
+                onpaste={handleComposerPaste}
                 onfocus={() => setTimeout(scrollToBottom, 180)}
                 oninput={(e) => {
                   const el = e.currentTarget as HTMLTextAreaElement;

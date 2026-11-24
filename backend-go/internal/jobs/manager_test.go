@@ -1,10 +1,17 @@
 package jobs
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
+	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/db"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/runner"
 )
 
@@ -42,5 +49,90 @@ func TestBuildAgentPromptPlacesUserPromptFirst(t *testing.T) {
 	slash := m.buildAgentPrompt("/usage", nil)
 	if slash != "/usage" {
 		t.Fatalf("expected unmodified slash command, got: %q", slash)
+	}
+}
+
+func TestLearnedRuleInjectionAndTelemetryRecording(t *testing.T) {
+	ollamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = io.WriteString(w, `{"models":[{"name":"qwen3:8b"}]}`)
+		case "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = io.WriteString(w, "{\"message\":{\"content\":\"ok\"},\"done\":true}\n")
+		}
+	}))
+	defer ollamaSrv.Close()
+
+	tmpDir := t.TempDir()
+	t.Setenv("GATEWAY_MODE", "standalone")
+	t.Setenv("DATA_DIR", tmpDir)
+	t.Setenv("OLLAMA_URL", ollamaSrv.URL)
+
+	cfg := config.Load()
+	store, err := db.Open(filepath.Join(tmpDir, "gateway.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.CreateAegysRule(db.AegysRule{
+		ID:      "rule-test-1",
+		Kind:    "preference",
+		Title:   "Respostas objetivas",
+		Content: "Responda com exemplos práticos em tópicos curtos.",
+		Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewManager(cfg, store, runner.Create(cfg))
+	prompt := mgr.buildAgentPrompt("Verifique docker ps", nil)
+	if !strings.HasPrefix(prompt, "Verifique docker ps") {
+		t.Fatalf("expected user prompt first even with learned rule suffix, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "Preferências e Regras Aprendidas (Aegys)") || !strings.Contains(prompt, "tópicos curtos") {
+		t.Fatalf("expected learned Aegys rule injected into agent prompt, got %q", prompt)
+	}
+
+	slash := "/review"
+	model := "ollama:qwen3:8b"
+	started, err := mgr.StartJob(context.Background(), CreateRequest{
+		Prompt:       "Faça review de segurança",
+		Model:        &model,
+		SlashCommand: &slash,
+	})
+	if err != nil {
+		t.Fatalf("StartJob failed: %v", err)
+	}
+	convID, _ := started["conversation_id"].(*string)
+	if convID == nil {
+		t.Fatalf("expected local conversation id, got %+v", started)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		stats, _ := store.GetTelemetryStats(5, 2)
+		if stats.TotalJobsOK >= 1 && len(stats.TopCommands) >= 1 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	if _, err := mgr.StartJob(context.Background(), CreateRequest{
+		Prompt:         "Não era isso, corrija o comando anterior",
+		ConversationID: convID,
+		Model:          &model,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	stats, err := store.GetTelemetryStats(5, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalJobsOK < 1 || stats.TotalCorrections < 1 || len(stats.TopCommands) == 0 || stats.TopCommands[0].Name != "/review" {
+		t.Fatalf("unexpected telemetry stats: %+v", stats)
 	}
 }

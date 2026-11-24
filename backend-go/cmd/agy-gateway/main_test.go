@@ -990,3 +990,114 @@ func TestCustomSlashCommandsAndOutboxInlinePreview(t *testing.T) {
 		t.Fatalf("expected outbox_files attached on assistant message, got %+v", convBody.Messages)
 	}
 }
+
+func TestEvolutionFeedbackReportAndOneClickApproval(t *testing.T) {
+	ollamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = io.WriteString(w, `{"models":[{"name":"qwen3:8b"}]}`)
+		case "/api/chat":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"done": true,
+				"message": map[string]string{
+					"content": `{"summary":"Padrao detectado.","proposals":[]}`,
+				},
+			})
+		}
+	}))
+	defer ollamaSrv.Close()
+
+	mux, store, _ := newTestServerWithEnv(t, map[string]string{
+		"OLLAMA_URL":                  ollamaSrv.URL,
+		"ENABLE_EVOLUTION":            "true",
+		"EVOLUTION_FASTPATH_MIN_HITS": "2",
+	})
+
+	// Record repeated prompt completions + explicit feedback + correction
+	for i := 0; i < 2; i++ {
+		if err := store.RecordTelemetryEvent(db.TelemetryEvent{
+			Kind:          "job_ok",
+			PromptPreview: "Resumo de containers docker ativos",
+			Model:         "ollama:qwen3:8b",
+			Engine:        "ollama",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fbRec := httptest.NewRecorder()
+	mux.ServeHTTP(fbRec, httptest.NewRequest(http.MethodPost, "/api/feedback", strings.NewReader(`{
+		"conversation_id":"conv-fb-1",
+		"rating":"down",
+		"correction":"Responda em tópicos curtos",
+		"message_snippet":"Texto longo demais"
+	}`)))
+	if fbRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/feedback failed: %d %s", fbRec.Code, fbRec.Body.String())
+	}
+
+	// Trigger evolution run manually
+	runRec := httptest.NewRecorder()
+	mux.ServeHTTP(runRec, httptest.NewRequest(http.MethodPost, "/api/evolution/run", strings.NewReader(`{"force":true}`)))
+	if runRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/evolution/run failed: %d %s", runRec.Code, runRec.Body.String())
+	}
+
+	// Inspect report
+	repRec := httptest.NewRecorder()
+	mux.ServeHTTP(repRec, httptest.NewRequest(http.MethodGet, "/api/evolution/report", nil))
+	if repRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/evolution/report failed: %d", repRec.Code)
+	}
+	var report struct {
+		PendingCount int                    `json:"pending_count"`
+		Proposals    []db.EvolutionProposal `json:"proposals"`
+	}
+	if err := json.Unmarshal(repRec.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.PendingCount == 0 || len(report.Proposals) == 0 {
+		t.Fatalf("expected >= 1 pending proposal from deterministic repeated-prompt detection, got %+v", report)
+	}
+
+	// Approve fast_path_slash if present, or first proposal
+	var approvedID, rejectID string
+	for _, p := range report.Proposals {
+		if p.Kind == "fast_path_slash" && approvedID == "" {
+			approvedID = p.ID
+		} else if rejectID == "" {
+			rejectID = p.ID
+		}
+	}
+	if approvedID == "" {
+		approvedID = report.Proposals[0].ID
+	}
+
+	appRec := httptest.NewRecorder()
+	mux.ServeHTTP(appRec, httptest.NewRequest(http.MethodPost, "/api/evolution/proposals/"+approvedID+"/approve", nil))
+	if appRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/evolution/proposals/%s/approve failed: %d %s", approvedID, appRec.Code, appRec.Body.String())
+	}
+
+	// Double-approving returns conflict
+	dupAppRec := httptest.NewRecorder()
+	mux.ServeHTTP(dupAppRec, httptest.NewRequest(http.MethodPost, "/api/evolution/proposals/"+approvedID+"/approve", nil))
+	if dupAppRec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 on re-approve, got %d", dupAppRec.Code)
+	}
+
+	if rejectID != "" {
+		rejRec := httptest.NewRecorder()
+		mux.ServeHTTP(rejRec, httptest.NewRequest(http.MethodPost, "/api/evolution/proposals/"+rejectID+"/reject", nil))
+		if rejRec.Code != http.StatusOK {
+			t.Fatalf("POST reject failed: %d %s", rejRec.Code, rejRec.Body.String())
+		}
+	}
+
+	// Verify /evolve is reserved in slash commands API
+	evolveRec := httptest.NewRecorder()
+	mux.ServeHTTP(evolveRec, httptest.NewRequest(http.MethodPost, "/api/slash-commands", strings.NewReader(`{"command":"/evolve","prompt_template":"nope"}`)))
+	if evolveRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for reserved /evolve command, got %d", evolveRec.Code)
+	}
+}

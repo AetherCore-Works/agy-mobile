@@ -28,6 +28,7 @@ import (
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/botbridge"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/config"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/db"
+	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/evolution"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/jobs"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/runner"
 	"github.com/Phoenix7290/agy-mobile-gateway/backend-go/internal/web"
@@ -211,8 +212,10 @@ func newCockpitProxy(cockpitURL, token string) http.Handler {
 func buildMux(cfg config.GatewaySettings, store *db.GatewayDB, r runner.Runner, mgr *jobs.Manager, wd *watchdogState) *http.ServeMux {
 	notifier := automation.NewNotifier(store)
 	mgr.OnJobFinish = notifier.HandleJobFinish
+	evo := evolution.NewService(cfg, store, r, notifier)
 	sched := automation.NewScheduler(cfg, store, r, mgr, notifier)
-	return buildAppMux(cfg, store, r, mgr, wd, notifier, sched)
+	sched.OnEvolutionTick = evo.RunScheduled
+	return buildAppMux(cfg, store, r, mgr, wd, notifier, sched, evo)
 }
 
 func buildAppMux(
@@ -223,6 +226,7 @@ func buildAppMux(
 	wd *watchdogState,
 	notifier *automation.Notifier,
 	sched *automation.Scheduler,
+	evo *evolution.Service,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -254,14 +258,16 @@ func buildAppMux(
 		online := r.CheckOnline(req.Context(), 1500*time.Millisecond)
 		activeOS := r.ActiveOS(req.Context())
 		unreadAlerts, _ := store.CountUnreadAlerts()
+		pendingEvo, _ := store.CountPendingEvolutionProposals()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"online":        online,
-			"mode":          cfg.Mode,
-			"active_os":     activeOS,
-			"target_host":   cfg.TargetHost,
-			"wol_mac":       wolMAC,
-			"target_user":   cfg.TargetUser,
-			"unread_alerts": unreadAlerts,
+			"online":            online,
+			"mode":              cfg.Mode,
+			"active_os":         activeOS,
+			"target_host":       cfg.TargetHost,
+			"wol_mac":           wolMAC,
+			"target_user":       cfg.TargetUser,
+			"unread_alerts":     unreadAlerts,
+			"pending_evolution": pendingEvo,
 		})
 	})
 
@@ -1204,6 +1210,9 @@ func buildAppMux(
 	}
 	registerAutomationRoutes(mux, store, notifier, sched)
 	registerSlashCommandRoutes(mux, store)
+	if evo != nil {
+		registerEvolutionRoutes(mux, store, evo)
+	}
 
 	web.RegisterRoutes(mux, web.StaticFS())
 	return mux
@@ -1247,7 +1256,9 @@ func main() {
 	wd := &watchdogState{}
 	notifier := automation.NewNotifier(store)
 	jobMgr.OnJobFinish = notifier.HandleJobFinish
+	evo := evolution.NewService(cfg, store, execRunner, notifier)
 	sched := automation.NewScheduler(cfg, store, execRunner, jobMgr, notifier)
+	sched.OnEvolutionTick = evo.RunScheduled
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
@@ -1270,7 +1281,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           buildAppMux(cfg, store, execRunner, jobMgr, wd, notifier, sched),
+		Handler:           buildAppMux(cfg, store, execRunner, jobMgr, wd, notifier, sched, evo),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
