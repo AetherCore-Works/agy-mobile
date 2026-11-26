@@ -56,11 +56,11 @@ Itens aprovados para planejamento e execução em ciclos futuros:
 ## 6. Visibilidade de Cota, Troca Manual Oficial (ToS-Safe) & Fallback de Provedor
 > **Guardrail de Compliance (Google Antigravity ToS):** Proibido implementar rotação automática de contas, replay automático em `429`, proxies OAuth ou armazenamento multi-conta em banco/SQLite (`accounts.db`). Tudo aqui opera estritamente no modelo **1 conta ativa por vez**, com ação manual do usuário pelo fluxo oficial do `agy`.
 
-- [ ] **Detecção Limpa de `429 / RESOURCE_EXHAUSTED` + Notificação na PWA/Bots:**
-  - Reconhecer erro de cota esgotada no `runner.go`, interromper o job sem retry/failover automático entre contas e exibir card de ação manual na interface (e alerta opcional nos bots).
+- [x] **Detecção Limpa de `429 / RESOURCE_EXHAUSTED` + Notificação na PWA/Bots:**
+  - Reconhecer erro de cota esgotada no `manager.go` (`IsQuotaExceededError` + `error_code: "quota_exceeded"`), interromper o job sem retry/failover automático entre contas e exibir card de ação manual na interface.
 - [ ] **Painel/Atalhos de Cota (`/usage` e `/credits`):**
-  - Expor atalho rápido para consultar uso de cota e AI Credits do `agy` na conta atualmente autenticada.
-- [ ] **Assistente Guiado de Troca Manual via *Remote SSH OAuth* (`TerminalModal`):**
+  - Expor atalho rápido para consultar uso de cota e AI Credits do `agy` na conta atualmente autenticada (atalho `/usage` já exposto no card de cota).
+- [x] **Assistente Guiado de Troca Manual via *Remote SSH OAuth* (`TerminalModal`):**
   - Quando o usuário optar por trocar manualmente entre contas pagas legítimas, abrir sessão interativa no terminal do host para o próprio usuário rodar `/logout` + `agy` (modo Remote SSH OAuth), destacando a URL oficial de login clicável no celular e facilitando colar o *authorization code* descartável direto no `stdin` do `agy` (sem capturar/armazenar tokens no gateway).
-- [ ] **Fallback Explícito de Backend (Ollama Local ou `GEMINI_API_KEY`):**
-  - Permitir ao usuário alternar manualmente a conversa/próximo turno para um provedor alternativo legítimo (**Ollama local** ou **`modelProvider: "gemini"` + `GEMINI_API_KEY`** própria) ao atingir o teto da janela de 5h.
+- [x] **Fallback Explícito de Backend (Ollama Local ou `GEMINI_API_KEY`):**
+  - Permitir ao usuário alternar manualmente a conversa/próximo turno para um provedor alternativo legítimo (**Ollama local** implementado no card de cota; `GEMINI_API_KEY` configurável no host) ao atingir o teto da janela de 5h.

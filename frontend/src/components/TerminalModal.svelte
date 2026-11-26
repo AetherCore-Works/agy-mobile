@@ -129,6 +129,10 @@
       if (cmd === '0') {
         const text = decoder.decode(bytes.subarray(1));
         term?.write(text);
+        const oauthUrl = extractGoogleOAuthUrl(text);
+        if (oauthUrl) {
+          detectedOAuthUrl = oauthUrl;
+        }
       }
     };
 
@@ -152,6 +156,7 @@
   }
 
   function disconnectTerminal() {
+    detectedOAuthUrl = "";
     if (ws) {
       ws.close();
       ws = null;
@@ -178,6 +183,15 @@
 
   function insertText(txt: string) {
     termInputVal += txt;
+  }
+
+  let detectedOAuthUrl = $state("");
+
+  function extractGoogleOAuthUrl(raw: string): string {
+    const clean = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    const m = clean.match(/https:\/\/accounts\.google\.com\/[^\s"'<>]+/);
+    if (!m) return '';
+    return m[0].replace(/[.,;:)\]}]+$/, '');
   }
 
   async function pasteClipboard() {
@@ -299,6 +313,32 @@
     </div>
 
     <!-- Native xterm.js Canvas (always dark high-contrast with breathing padding) -->
+    {#if detectedOAuthUrl}
+      <div class="bg-amber-500/10 border-b border-amber-500/30 px-3 py-2 flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div class="min-w-0 flex-1">
+          <p class="text-[11px] font-semibold text-amber-300">URL oficial de login Google detectada (Remote SSH OAuth)</p>
+          <p class="text-[10px] text-[var(--text-muted)] truncate">Abra o link, copie o código descartável e toque em <strong>Colar</strong> abaixo.</p>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <a
+            href={detectedOAuthUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[11px] font-semibold border border-amber-500/40"
+          >
+            Abrir Login Google
+          </a>
+          <button
+            type="button"
+            onclick={() => (detectedOAuthUrl = "")}
+            class="px-2 py-1 rounded-lg text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            aria-label="Fechar aviso OAuth"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    {/if}
     <div class="flex-1 min-h-0 w-full bg-zinc-950 px-2.5 py-1.5 flex flex-col overflow-hidden">
       <div bind:this={termContainer} class="flex-1 min-h-0 w-full overflow-hidden"></div>
     </div>

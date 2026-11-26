@@ -738,17 +738,47 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 	m.notifyJobResult(jobID, currentConvID, "completed", "AGY Concluído", fmt.Sprintf("Sessão finalizada (%s).", selectedModel), "default")
 }
 
+// IsQuotaExceededError reports whether an agent error message indicates a 429 / quota / rate-limit exhaustion.
+func IsQuotaExceededError(msg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if lower == "" {
+		return false
+	}
+	for _, needle := range []string{
+		"429",
+		"resource_exhausted",
+		"quota exceeded",
+		"rate limit",
+		"weekly limit",
+		"5-hour",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) failJob(jobID, convID string, ctx context.Context, msg string) {
 	canceled := errors.Is(ctx.Err(), context.Canceled)
 	if canceled {
 		msg = "Execução cancelada pelo usuário."
 	}
+	quotaExceeded := !canceled && IsQuotaExceededError(msg)
 	errStatus := "error"
 	_ = m.store.UpdateJob(jobID, strPtrOrNil(convID), &errStatus, &msg)
-	m.emitEvent(jobID, "error", map[string]any{"type": "error", "error": msg})
+	payload := map[string]any{"type": "error", "error": msg}
+	if quotaExceeded {
+		payload["error_code"] = "quota_exceeded"
+	}
+	m.emitEvent(jobID, "error", payload)
 	if !canceled {
 		m.recordJobOutcome(jobID, convID, "error", msg, nil)
-		m.notifyJobResult(jobID, convID, "error", "AGY Erro", msg, "high")
+		title := "AGY Erro"
+		if quotaExceeded {
+			title = "AGY Cota Atingida"
+		}
+		m.notifyJobResult(jobID, convID, "error", title, msg, "high")
 	}
 }
 

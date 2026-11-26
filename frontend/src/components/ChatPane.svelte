@@ -139,6 +139,8 @@
   let dragOverComposer = $state(false);
   let attachError = $state("");
   let attachErrorTimer: ReturnType<typeof setTimeout> | undefined;
+  let quotaExceededError = $state("");
+  let quotaNotice = $state("");
 
   let isGenerating = $state(false);
   let activeJobId = $state<string | null>(localStorage.getItem(jobStorageKey));
@@ -481,6 +483,13 @@
               }
             } else if (ev.type === "error") {
               jobFinished = true;
+              const errText = String(ev.error || "");
+              if (
+                ev.error_code === "quota_exceeded" ||
+                /429|resource_exhausted|quota exceeded|rate limit|weekly limit/i.test(errText)
+              ) {
+                quotaExceededError = errText || "Limite de cota atingido.";
+              }
               messages[agentIdx].content += `\n\n> **Erro:** ${ev.error}`;
               messages = messages;
             }
@@ -1964,6 +1973,69 @@
                   </Button>
                 </div>
               </div>
+            </div>
+          {/if}
+
+          {#if quotaExceededError}
+            {@const ollamaFallback = models.find((m) => m.id.startsWith("ollama:"))}
+            <div class="bg-amber-500/10 border-b border-amber-500/30 px-3 py-2 flex flex-col gap-1.5">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <p class="text-[11px] font-semibold text-amber-300">Cota AGY atingida (ToS-Safe)</p>
+                  <p class="text-[10px] text-muted-foreground truncate">{quotaExceededError}</p>
+                </div>
+                <button
+                  type="button"
+                  onclick={() => (quotaExceededError = "")}
+                  class="text-xs text-muted-foreground hover:text-foreground px-1"
+                  aria-label="Fechar aviso de cota"
+                >
+                  ×
+                </button>
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onclick={() => {
+                    quotaExceededError = "";
+                    onOpenTerminal();
+                  }}
+                >
+                  Trocar Conta Manualmente (Fluxo Oficial)
+                </Button>
+                {#if ollamaFallback}
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onclick={() => {
+                      userTouchedModel = true;
+                      selectedModel = ollamaFallback.id;
+                      quotaExceededError = "";
+                      quotaNotice = `Backend alterado para ${ollamaFallback.name}. Envie sua próxima mensagem.`;
+                    }}
+                  >
+                    Usar Ollama Local ({ollamaFallback.name})
+                  </Button>
+                {/if}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onclick={() => {
+                    userInput = "/usage";
+                    quotaExceededError = "";
+                  }}
+                >
+                  Consultar /usage
+                </Button>
+              </div>
+            </div>
+          {/if}
+
+          {#if quotaNotice}
+            <div class="bg-emerald-500/10 border-b border-emerald-500/30 px-3 py-1.5 flex items-center justify-between gap-2 text-[11px] text-emerald-300">
+              <span>{quotaNotice}</span>
+              <button type="button" onclick={() => (quotaNotice = "")} class="text-xs px-1">×</button>
             </div>
           {/if}
 

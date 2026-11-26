@@ -136,3 +136,36 @@ func TestLearnedRuleInjectionAndTelemetryRecording(t *testing.T) {
 		t.Fatalf("unexpected telemetry stats: %+v", stats)
 	}
 }
+
+func TestIsQuotaExceededErrorAndEventCode(t *testing.T) {
+	if !IsQuotaExceededError("HTTP 429 RESOURCE_EXHAUSTED: 5-hour quota exceeded") {
+		t.Fatal("expected 429 RESOURCE_EXHAUSTED to be detected")
+	}
+	if IsQuotaExceededError("connection refused") {
+		t.Fatal("did not expect connection refused to be classified as quota_exceeded")
+	}
+
+	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	mgr := NewManager(config.GatewaySettings{Mode: "gateway"}, store, nil)
+	jobID := "job-quota-1"
+	if _, err := store.CreateJob(jobID, nil, "test", "auto", "agy", "gemini-3-flash"); err != nil {
+		t.Fatal(err)
+	}
+	mgr.failJob(jobID, "", context.Background(), "429 RESOURCE_EXHAUSTED: rate limit exceeded")
+
+	events, err := store.GetJobEventsAfter(jobID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].EventType != "error" {
+		t.Fatalf("expected 1 error event, got %+v", events)
+	}
+	if code, _ := events[0].Payload["error_code"].(string); code != "quota_exceeded" {
+		t.Fatalf("expected error_code=quota_exceeded, got %+v", events[0].Payload)
+	}
+}
