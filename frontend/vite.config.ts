@@ -10,6 +10,23 @@ export default defineConfig({
     outDir: '../backend-go/internal/web/static/dist',
     emptyOutDir: true,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/@xterm')) return 'xterm';
+          if (id.includes('node_modules/highlight.js') || id.includes('node_modules/marked')) {
+            return 'markdown';
+          }
+          if (
+            id.includes('node_modules/bits-ui') ||
+            id.includes('node_modules/svelte-toolbelt') ||
+            id.includes('node_modules/runed')
+          ) {
+            return 'ui-vendor';
+          }
+        },
+      },
+    },
   },
   server: {
     proxy: {

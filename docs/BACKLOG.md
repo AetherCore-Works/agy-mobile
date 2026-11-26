@@ -43,10 +43,10 @@ Itens aprovados para planejamento e execução em ciclos futuros:
   - Montar `./ssh:/root/.ssh:ro` (com chave dedicada opcional) no serviço `agy-ttyd` do `compose.yaml` e suporte a flag `TTYD_AUTO_AUTH=true|false` (`scripts/ttyd-entrypoint.sh`) para abrir o shell remoto sem pedir senha no celular a cada sessão.
 - [ ] **Seletor Multi-Host no Topo, Terminal e Cockpit (`CachyCore` ↔ `Dell G15` ↔ `RPi`):**
   - Permitir alternar o nó alvo do homelab diretamente pela PWA para abrir sessões SSH e inspecionar telemetria/containers em múltiplos hosts.
-- [ ] **Code Splitting / Lazy-Loading do `@xterm/xterm` e Modais:**
-  - Carregar `TerminalModal` (e o motor `xterm.js`), highlighters de código e modais secundários sob demanda via `import()`, reduzindo o chunk principal (~696 kB) e acelerando o carregamento em 4G/5G.
-- [ ] **Timeline Visual de Tool Calls & Diffs no Chat:**
-  - Adicionar um acordeão discreto e colapsável nas respostas do agente exibindo as ferramentas executadas, comandos rodados e arquivos modificados sem poluir o texto principal.
+- [x] **Code Splitting / Lazy-Loading do `@xterm/xterm` e Modais:**
+  - Carregar `TerminalModal` (e o motor `xterm.js`), `EvolutionModal`, `AutomationsModal`, `OutboxModal`, `OutboxPreviewModal`, `SlashCommandsModal`, `ShareModal` e `HostManagerModal` sob demanda via `import()`, mais `manualChunks` (`xterm`, `markdown`, `ui-vendor`) no `vite.config.ts`.
+- [x] **Timeline Visual de Tool Calls & Diffs no Chat:**
+  - Adicionar um acordeão discreto e colapsável (`<details>`) nas respostas do agente exibindo as ferramentas executadas (`tool_timeline`), comandos rodados e duração sem poluir o texto principal.
 - [x] **CI & CD Completo (GitHub Actions + Self-Hosted Runner no Homelab):**
   - **CI:** `.github/workflows/ci.yml` (`go vet` + `go test -race` em `backend-go` e `packages/cockpit`, `npx tsc --noEmit && npm run build`, Gitleaks e matriz cross-OS em todo PR/push).
   - **CD:** `.github/workflows/release.yml` (releases por tag `v*` com binários multi-OS + `SHA256SUMS.txt`) e `.github/workflows/deploy-rpi.yml` (deploy no RPi via Self-Hosted Runner na LAN com `scripts/deploy-rpi.sh` + `/api/health`; ativável com `ENABLE_RPI_AUTO_DEPLOY=true`).

@@ -169,3 +169,18 @@ func TestIsQuotaExceededErrorAndEventCode(t *testing.T) {
 		t.Fatalf("expected error_code=quota_exceeded, got %+v", events[0].Payload)
 	}
 }
+
+func TestRecordToolTimelineStep(t *testing.T) {
+	var timeline []ToolTimelineEntry
+	starts := map[string]time.Time{}
+
+	recordToolTimelineStep(&timeline, starts, "run_command", "git status", "ACTIVE")
+	if len(timeline) != 1 || timeline[0].State != "ACTIVE" {
+		t.Fatalf("expected 1 ACTIVE entry, got %+v", timeline)
+	}
+	time.Sleep(5 * time.Millisecond)
+	recordToolTimelineStep(&timeline, starts, "run_command", "git status", "DONE")
+	if len(timeline) != 1 || timeline[0].State != "DONE" || timeline[0].DurationMs < 1 {
+		t.Fatalf("expected updated DONE entry with duration, got %+v", timeline)
+	}
+}

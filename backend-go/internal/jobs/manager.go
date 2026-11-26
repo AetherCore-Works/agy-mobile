@@ -566,6 +566,8 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 	emittedAny := false
 	executedTools := []string{}
 	seenTools := map[string]bool{}
+	toolTimeline := []ToolTimelineEntry{}
+	toolStarts := map[string]time.Time{}
 	var respPreview strings.Builder
 
 	scanner := bufio.NewScanner(stdout)
@@ -611,6 +613,7 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 					seenTools[toolName] = true
 					executedTools = append(executedTools, toolName)
 				}
+				recordToolTimelineStep(&toolTimeline, toolStarts, toolName, truncateStr(cmdPreview, 80), toolState)
 				m.emitEvent(jobID, "tool", map[string]any{
 					"type":    "tool",
 					"name":    toolName,
@@ -683,6 +686,7 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 				"conversation_id": nullableStr(currentConvID),
 				"status":          resStatus,
 				"executed_tools":  executedTools,
+				"tool_timeline":   toolTimeline,
 				"response":        finalResp,
 				"outbox_files":    newOutbox,
 			})
@@ -717,6 +721,7 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			"conversation_id": nullableStr(currentConvID),
 			"status":          "SUCCESS",
 			"executed_tools":  executedTools,
+			"tool_timeline":   toolTimeline,
 			"outbox_files":    newOutbox,
 		})
 		doneStatus := "completed"
@@ -728,6 +733,7 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 			"conversation_id": nullableStr(currentConvID),
 			"status":          "SUCCESS",
 			"executed_tools":  executedTools,
+			"tool_timeline":   toolTimeline,
 			"outbox_files":    newOutbox,
 		})
 		doneStatus := "completed"
@@ -736,6 +742,61 @@ func (m *Manager) runAGYJob(ctx context.Context, jobID string, convID *string, p
 
 	m.recordJobOutcome(jobID, currentConvID, "completed", "", executedTools)
 	m.notifyJobResult(jobID, currentConvID, "completed", "AGY Concluído", fmt.Sprintf("Sessão finalizada (%s).", selectedModel), "default")
+}
+
+// ToolTimelineEntry represents a structured tool execution step for the chat timeline UI.
+type ToolTimelineEntry struct {
+	Name       string `json:"name"`
+	Preview    string `json:"preview,omitempty"`
+	State      string `json:"state"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+}
+
+func recordToolTimelineStep(timeline *[]ToolTimelineEntry, starts map[string]time.Time, name, preview, state string) {
+	if timeline == nil {
+		return
+	}
+	if strings.EqualFold(state, "ACTIVE") {
+		if _, ok := starts[name]; !ok {
+			starts[name] = time.Now()
+		}
+		for i := len(*timeline) - 1; i >= 0; i-- {
+			if (*timeline)[i].Name == name && strings.EqualFold((*timeline)[i].State, "ACTIVE") {
+				if preview != "" {
+					(*timeline)[i].Preview = preview
+				}
+				return
+			}
+		}
+		*timeline = append(*timeline, ToolTimelineEntry{
+			Name:    name,
+			Preview: preview,
+			State:   "ACTIVE",
+		})
+		return
+	}
+
+	var durMs int64
+	if started, ok := starts[name]; ok {
+		durMs = time.Since(started).Milliseconds()
+		delete(starts, name)
+	}
+	for i := len(*timeline) - 1; i >= 0; i-- {
+		if (*timeline)[i].Name == name && strings.EqualFold((*timeline)[i].State, "ACTIVE") {
+			(*timeline)[i].State = state
+			(*timeline)[i].DurationMs = durMs
+			if preview != "" {
+				(*timeline)[i].Preview = preview
+			}
+			return
+		}
+	}
+	*timeline = append(*timeline, ToolTimelineEntry{
+		Name:       name,
+		Preview:    preview,
+		State:      state,
+		DurationMs: durMs,
+	})
 }
 
 // IsQuotaExceededError reports whether an agent error message indicates a 429 / quota / rate-limit exhaustion.

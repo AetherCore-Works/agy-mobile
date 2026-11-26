@@ -27,10 +27,18 @@ export interface ConversationMetaPatch {
   tag_color?: string;
 }
 
+export interface ToolTimelineEntry {
+  name: string;
+  preview?: string;
+  state: string;
+  duration_ms?: number;
+}
+
 export interface ChatMessage {
   role: 'user' | 'agent';
   content: string;
   outbox_files?: string[];
+  tool_timeline?: ToolTimelineEntry[];
   job_id?: string;
   feedback?: 'up' | 'down' | null;
 }

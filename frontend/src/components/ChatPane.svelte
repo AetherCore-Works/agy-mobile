@@ -431,6 +431,29 @@
               if (ev.name && !currentTools.includes(ev.name)) {
                 currentTools.push(ev.name);
               }
+              const tState = String(ev.state || "ACTIVE");
+              const tPreview = ev.preview ? String(ev.preview) : "";
+              const tl = [...(messages[agentIdx].tool_timeline ?? [])];
+              if (tState === "ACTIVE") {
+                const existingIdx = tl.findIndex((s) => s.name === tName && s.state === "ACTIVE");
+                if (existingIdx >= 0) {
+                  if (tPreview) tl[existingIdx] = { ...tl[existingIdx], preview: tPreview };
+                } else {
+                  tl.push({ name: tName, preview: tPreview, state: "ACTIVE" });
+                }
+              } else {
+                let updated = false;
+                for (let k = tl.length - 1; k >= 0; k--) {
+                  if (tl[k].name === tName && tl[k].state === "ACTIVE") {
+                    tl[k] = { ...tl[k], state: tState, preview: tPreview || tl[k].preview };
+                    updated = true;
+                    break;
+                  }
+                }
+                if (!updated) tl.push({ name: tName, preview: tPreview, state: tState });
+              }
+              messages[agentIdx].tool_timeline = tl;
+              messages = messages;
               toolStepCount += ev.state === "ACTIVE" ? 1 : 0.6;
               setProgressFloor(20 + 54 * (1 - Math.exp(-toolStepCount * 0.42)));
               const preview = ev.preview
@@ -464,6 +487,10 @@
                 );
                 messages = messages;
                 void onOutboxRefresh?.();
+              }
+              if (Array.isArray(ev.tool_timeline) && ev.tool_timeline.length > 0) {
+                messages[agentIdx].tool_timeline = ev.tool_timeline;
+                messages = messages;
               }
               if (!messages[agentIdx].content.trim()) {
                 if (ev.response && String(ev.response).trim()) {
@@ -1553,6 +1580,33 @@
                       </div>
                     </div>
                   {:else}
+                    {#if msg.tool_timeline && msg.tool_timeline.length > 0}
+                      <details class="mb-2 rounded-lg border border-border/70 bg-muted/40 px-2.5 py-1.5 text-[11px]">
+                        <summary class="cursor-pointer select-none font-mono text-muted-foreground hover:text-foreground">
+                          {msg.tool_timeline.length} ferramenta{msg.tool_timeline.length === 1 ? "" : "s"} executada{msg.tool_timeline.length === 1 ? "" : "s"} — ver detalhes
+                        </summary>
+                        <ul class="mt-1.5 space-y-1 border-t border-border/50 pt-1.5 font-mono text-[10px]">
+                          {#each msg.tool_timeline as step}
+                            <li class="flex items-start justify-between gap-2">
+                              <span class="min-w-0 truncate">
+                                <span class={step.state === "ACTIVE" ? "text-amber-400" : "text-emerald-400"}>
+                                  {step.state === "ACTIVE" ? "●" : "✓"}
+                                </span>
+                                <span class="font-semibold text-foreground">{step.name}</span>
+                                {#if step.preview}
+                                  <span class="text-muted-foreground"> · {step.preview}</span>
+                                {/if}
+                              </span>
+                              {#if step.duration_ms && step.duration_ms > 0}
+                                <span class="shrink-0 text-muted-foreground">
+                                  {step.duration_ms >= 1000 ? `${(step.duration_ms / 1000).toFixed(1)}s` : `${step.duration_ms}ms`}
+                                </span>
+                              {/if}
+                            </li>
+                          {/each}
+                        </ul>
+                      </details>
+                    {/if}
                     <div
                       class="markdown-body {isActiveBubble
                         ? 'typing-cursor'

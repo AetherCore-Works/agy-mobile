@@ -6,15 +6,8 @@
   import AiSpinner from "./components/AiSpinner.svelte";
   import ChatPane from "./components/ChatPane.svelte";
   import Sidebar from "./components/Sidebar.svelte";
-  import TerminalModal from "./components/TerminalModal.svelte";
-  import OutboxModal from "./components/OutboxModal.svelte";
-  import OutboxPreviewModal, { type PreviewTarget } from "./components/OutboxPreviewModal.svelte";
-  import ShareModal from "./components/ShareModal.svelte";
-  import AutomationsModal from "./components/AutomationsModal.svelte";
-  import SlashCommandsModal from "./components/SlashCommandsModal.svelte";
+  import type { PreviewTarget } from "./components/OutboxPreviewModal.svelte";
   import AuthLockScreen from "./components/AuthLockScreen.svelte";
-  import HostManagerModal from "./components/HostManagerModal.svelte";
-  import EvolutionModal from "./components/EvolutionModal.svelte";
   import { Button } from "./lib/components/ui/button/index.js";
   import { Card } from "./lib/components/ui/card/index.js";
   import { Badge } from "./lib/components/ui/badge/index.js";
@@ -1263,15 +1256,19 @@
   }}
 />
 
-<HostManagerModal
-  bind:open={hostManagerOpen}
-  bind:hosts
-  bind:activeHostId
-  onActivated={() => {
-    void refreshStatusAndOutbox();
-    void refreshHosts();
-  }}
-/>
+{#if hostManagerOpen}
+  {#await import("./components/HostManagerModal.svelte") then { default: HostManagerModal }}
+    <HostManagerModal
+      bind:open={hostManagerOpen}
+      bind:hosts
+      bind:activeHostId
+      onActivated={() => {
+        void refreshStatusAndOutbox();
+        void refreshHosts();
+      }}
+    />
+  {/await}
+{/if}
 
 {#if authEnabled && !authAuthenticated}
   <AuthLockScreen
@@ -1283,46 +1280,74 @@
   />
 {/if}
 
-<TerminalModal
-  bind:open={terminalOpen}
-  hostLabel={targetHostName ||
-    (gatewayMode === "standalone" ? "Terminal Local" : "Remote Terminal")}
-/>
-<OutboxModal bind:open={outboxOpen} bind:files={outboxFiles} {outboxDir} />
-<OutboxPreviewModal bind:target={mediaPreviewTarget} />
-<SlashCommandsModal
-  bind:open={slashModalOpen}
-  bind:commands={slashCommands}
-  {models}
-/>
-<ShareModal
-  bind:open={shareOpen}
-  title={shareTitle}
-  singleMarkdown={shareSingleMD}
-  messages={shareMessages}
-  {themeMode}
-  {themePalette}
-/>
-<AutomationsModal
-  bind:open={automationsOpen}
-  {models}
-  {defaultModel}
-  canInstallPWA={Boolean(deferredInstallPrompt)}
-  onInstallPWA={handleInstallPWA}
-  onOpenConversation={(convId, title) => {
-    paneRefs[focusedTabId]?.loadConversation(convId, title);
-  }}
-  onUnreadChange={(n) => {
-    unreadAlerts = n;
-  }}
-/>
-<EvolutionModal
-  bind:open={evolutionOpen}
-  bind:report={evolutionReport}
-  onApproveProposal={handleApproveEvolutionProposal}
-  onRejectProposal={handleRejectEvolutionProposal}
-  onRefreshReport={refreshEvolutionReport}
-/>
+{#if terminalOpen}
+  {#await import("./components/TerminalModal.svelte") then { default: TerminalModal }}
+    <TerminalModal
+      bind:open={terminalOpen}
+      hostLabel={targetHostName ||
+        (gatewayMode === "standalone" ? "Terminal Local" : "Remote Terminal")}
+    />
+  {/await}
+{/if}
+{#if outboxOpen}
+  {#await import("./components/OutboxModal.svelte") then { default: OutboxModal }}
+    <OutboxModal bind:open={outboxOpen} bind:files={outboxFiles} {outboxDir} />
+  {/await}
+{/if}
+{#if mediaPreviewTarget}
+  {#await import("./components/OutboxPreviewModal.svelte") then { default: OutboxPreviewModal }}
+    <OutboxPreviewModal bind:target={mediaPreviewTarget} />
+  {/await}
+{/if}
+{#if slashModalOpen}
+  {#await import("./components/SlashCommandsModal.svelte") then { default: SlashCommandsModal }}
+    <SlashCommandsModal
+      bind:open={slashModalOpen}
+      bind:commands={slashCommands}
+      {models}
+    />
+  {/await}
+{/if}
+{#if shareOpen}
+  {#await import("./components/ShareModal.svelte") then { default: ShareModal }}
+    <ShareModal
+      bind:open={shareOpen}
+      title={shareTitle}
+      singleMarkdown={shareSingleMD}
+      messages={shareMessages}
+      {themeMode}
+      {themePalette}
+    />
+  {/await}
+{/if}
+{#if automationsOpen}
+  {#await import("./components/AutomationsModal.svelte") then { default: AutomationsModal }}
+    <AutomationsModal
+      bind:open={automationsOpen}
+      {models}
+      {defaultModel}
+      canInstallPWA={Boolean(deferredInstallPrompt)}
+      onInstallPWA={handleInstallPWA}
+      onOpenConversation={(convId, title) => {
+        paneRefs[focusedTabId]?.loadConversation(convId, title);
+      }}
+      onUnreadChange={(n) => {
+        unreadAlerts = n;
+      }}
+    />
+  {/await}
+{/if}
+{#if evolutionOpen}
+  {#await import("./components/EvolutionModal.svelte") then { default: EvolutionModal }}
+    <EvolutionModal
+      bind:open={evolutionOpen}
+      bind:report={evolutionReport}
+      onApproveProposal={handleApproveEvolutionProposal}
+      onRejectProposal={handleRejectEvolutionProposal}
+      onRefreshReport={refreshEvolutionReport}
+    />
+  {/await}
+{/if}
 
 {#if pendingDelete}
   <div
