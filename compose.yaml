@@ -39,7 +39,14 @@ services:
     container_name: agy-ttyd
     restart: unless-stopped
     network_mode: host
-    command: ["ttyd", "-p", "7681", "-b", "/terminal", "-W", "-t", "fontSize=14", "ssh", "-t", "-o", "StrictHostKeyChecking=accept-new", "${TTYD_SSH_TARGET:-user@192.0.2.10}", "exec ${TTYD_REMOTE_SHELL:-bash} -l"]
+    volumes:
+      - ./ssh:/root/.ssh:ro
+    environment:
+      - TTYD_SSH_TARGET=${TTYD_SSH_TARGET:-user@192.0.2.10}
+      - TTYD_SSH_PORT=${TTYD_SSH_PORT:-22}
+      - TTYD_REMOTE_SHELL=${TTYD_REMOTE_SHELL:-bash}
+      - TTYD_AUTO_AUTH=${TTYD_AUTO_AUTH:-true}
+      - TTYD_SSH_KEY=${TTYD_SSH_KEY:-/root/.ssh/id_ed25519}
 
   agy-cockpit:
     profiles: ["cockpit"]

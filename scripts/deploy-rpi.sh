@@ -22,7 +22,7 @@ rsync -az --delete \
   --exclude='app' \
   "$REPO_DIR/" "${RPI_HOST}:${RPI_STACK_DIR}/"
 
-echo "==> [3/3] Rebuilding and restarting agy-gateway container on ${RPI_HOST}..."
-ssh "$RPI_HOST" "cd ${RPI_STACK_DIR} && docker compose up -d --build agy-gateway && sleep 2 && curl -sf http://127.0.0.1:8088/api/health"
+echo "==> [3/3] Rebuilding and restarting agy-gateway & agy-ttyd containers on ${RPI_HOST}..."
+ssh "$RPI_HOST" "cd ${RPI_STACK_DIR} && docker compose up -d --build agy-gateway agy-ttyd && sleep 2 && curl -sf http://127.0.0.1:8088/api/health"
 echo ""
 echo "==> Deploy completed safely!"

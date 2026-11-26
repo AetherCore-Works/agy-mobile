@@ -751,6 +751,7 @@ func (r *SSHRunner) sshBaseArgsFor(t sshTarget, connectTimeoutSec int) []string 
 		"-p", t.port,
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
+		"-o", "LogLevel=ERROR",
 		"-o", "BatchMode=yes",
 		"-o", fmt.Sprintf("ConnectTimeout=%d", connectTimeoutSec),
 		fmt.Sprintf("%s@%s", t.user, t.host),

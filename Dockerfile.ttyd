@@ -1,3 +1,6 @@
 FROM tsl0922/ttyd:alpine
 USER root
 RUN apk add --no-cache openssh-client
+COPY scripts/ttyd-entrypoint.sh /usr/local/bin/ttyd-entrypoint.sh
+RUN chmod +x /usr/local/bin/ttyd-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/ttyd-entrypoint.sh"]

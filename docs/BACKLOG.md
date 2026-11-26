@@ -39,8 +39,8 @@ A camada conversacional multi-canal (Discord, Telegram, WhatsApp via providers p
 ## 5. Próximos Refinamentos de Terminal, Multi-Host & UX Mobile (Planejamento)
 Itens aprovados para planejamento e execução em ciclos futuros:
 
-- [ ] **Login SSH por Chave no `agy-ttyd`:**
-  - Montar `./ssh:/root/.ssh:ro` (com chave dedicada opcional) no serviço `agy-ttyd` do `compose.yaml` e suporte a flag para abrir o shell remoto sem pedir senha no celular a cada sessão.
+- [x] **Login SSH por Chave no `agy-ttyd`:**
+  - Montar `./ssh:/root/.ssh:ro` (com chave dedicada opcional) no serviço `agy-ttyd` do `compose.yaml` e suporte a flag `TTYD_AUTO_AUTH=true|false` (`scripts/ttyd-entrypoint.sh`) para abrir o shell remoto sem pedir senha no celular a cada sessão.
 - [ ] **Seletor Multi-Host no Topo, Terminal e Cockpit (`CachyCore` ↔ `Dell G15` ↔ `RPi`):**
   - Permitir alternar o nó alvo do homelab diretamente pela PWA para abrir sessões SSH e inspecionar telemetria/containers em múltiplos hosts.
 - [ ] **Code Splitting / Lazy-Loading do `@xterm/xterm` e Modais:**
