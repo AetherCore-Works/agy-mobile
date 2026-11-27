@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore Vite minified dist bundles and unit test synthetic fixtures"
+paths = [
+  '''^backend-go/internal/web/static/dist/.*''',
+  '''.*_test\.go$''',
+]

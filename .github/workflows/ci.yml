@@ -80,8 +80,11 @@ jobs:
           GITLEAKS_VER="8.24.2"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_linux_x64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" gitleaks
-      - name: Scan repository for secrets
-        run: '"$RUNNER_TEMP/gitleaks" detect --source . --redact --no-banner'
+      - name: Scan current tree for secrets
+        run: '"$RUNNER_TEMP/gitleaks" detect --source . --no-git --redact --no-banner'
+      - name: Scan PR commit range for secrets
+        if: github.event_name == 'pull_request'
+        run: '"$RUNNER_TEMP/gitleaks" detect --source . --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" --redact --no-banner'
 
   cross-build:
     name: Cross-OS Build (${{ matrix.goos }}/${{ matrix.goarch }})
